@@ -8,7 +8,6 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -361,252 +360,332 @@ export const GroupSettingsModal: React.FC<GroupSettingsModalProps> = ({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
-        <DialogHeader>
-          <DialogTitle>Управление группой «{group.name}»</DialogTitle>
-          <DialogDescription>
-            Приглашайте участников, управляйте составом и параметрами группы
-          </DialogDescription>
-        </DialogHeader>
-
-        <Tabs value={activeTab} onValueChange={setActiveTab} className="pt-1">
-          <TabsList className="grid w-full grid-cols-2">
-            <TabsTrigger value="members">
-              <Users className="size-3.5" />
-              Участники ({group.members.length})
-            </TabsTrigger>
-            <TabsTrigger value="settings">
-              <Settings className="size-3.5" />
-              Настройки
-            </TabsTrigger>
-          </TabsList>
-
-          {/* ВКЛАДКА 1: УЧАСТНИКИ И ПРИГЛАШЕНИЯ */}
-          <TabsContent value="members" className="space-y-4 pt-3">
-            <form onSubmit={handleInvite} className="space-y-1.5">
-              <Label>Пригласить участника по @username</Label>
-              <div className="flex gap-2">
-                <Input
-                  value={usernameInput}
-                  onChange={(e) => setUsernameInput(e.target.value)}
-                  placeholder="Введите @username друга..."
-                  className="font-mono text-sm"
-                />
-                <Button type="submit" disabled={loading || !usernameInput.trim()}>
-                  <UserPlus className="size-3.5" />
-                  Пригласить
-                </Button>
+      {/* Модалка на полную высоту экрана точно так же, как модалка профиля */}
+      <DialogContent className="sm:max-w-[680px] p-0 overflow-hidden gap-0 top-4 bottom-4 translate-y-0 h-[calc(100vh-2rem)] max-h-[calc(100vh-2rem)] flex flex-col">
+        <div className="flex flex-col sm:flex-row flex-1 h-full overflow-hidden">
+          {/* ЛЕВОЕ МЕНЮ В СТИЛЕ МОДАЛКИ ПРОФИЛЯ */}
+          <div className="w-full sm:w-52 shrink-0 border-b sm:border-b-0 sm:border-r border-border bg-muted/25 p-3 flex flex-col justify-between gap-4">
+            <div className="space-y-1">
+              <div className="px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground truncate">
+                {group.name}
               </div>
-            </form>
 
-            <div className="space-y-2 border-t border-border pt-3">
-              <Label className="text-xs text-muted-foreground">
-                Состав группы ({group.members.length})
-              </Label>
+              <button
+                type="button"
+                onClick={() => setActiveTab("members")}
+                className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-md text-xs font-medium cursor-pointer ${
+                  activeTab === "members"
+                    ? "bg-accent text-foreground"
+                    : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                }`}
+              >
+                <span className="flex items-center gap-2.5">
+                  <Users className="size-3.5 shrink-0" />
+                  <span>Участники</span>
+                </span>
+                <span className="text-[10px] font-mono px-1.5 py-0.2 rounded-full bg-muted text-muted-foreground">
+                  {group.members.length}
+                </span>
+              </button>
 
-              <div className="space-y-1.5 max-h-60 overflow-y-auto pr-1">
-                {group.members.map((m) => {
-                  const isMemberOwner = m.user_id === group.owner_id;
-                  const isMe = m.user_id === currentUser.id;
-                  const cleanName = m.display_name.replace(" (Вы)", "");
+              <button
+                type="button"
+                onClick={() => setActiveTab("settings")}
+                className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-md text-xs font-medium cursor-pointer ${
+                  activeTab === "settings"
+                    ? "bg-accent text-foreground"
+                    : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                }`}
+              >
+                <Settings className="size-3.5 shrink-0" />
+                <span>Настройки</span>
+              </button>
+            </div>
 
-                  return (
-                    <div
-                      key={m.user_id}
-                      className="flex items-center justify-between gap-2 p-2 rounded-lg border border-border bg-background/50"
-                    >
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <span
-                          className="size-6 rounded-full overflow-hidden flex items-center justify-center text-white font-semibold text-[11px] shrink-0"
-                          style={{
-                            backgroundColor: m.avatar_url ? undefined : m.avatar_color,
-                          }}
-                        >
-                          {m.avatar_url ? (
-                            <img
-                              src={m.avatar_url}
-                              alt={cleanName}
-                              className="size-full object-cover"
-                            />
-                          ) : (
-                            cleanName.slice(0, 1).toUpperCase()
-                          )}
-                        </span>
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-xs font-medium text-foreground truncate">
-                              {cleanName}
-                            </span>
-                            {isMe && (
-                              <Badge variant="secondary" className="h-4 px-1.5 text-[10px]">
-                                Вы
-                              </Badge>
-                            )}
-                            {isMemberOwner && (
-                              <Badge variant="outline" className="h-4 px-1.5 text-[10px] gap-0.5">
-                                <Crown className="size-2.5 text-amber-500" />
-                                Владелец
-                              </Badge>
-                            )}
-                            {m.status === "pending" && (
-                              <Badge variant="partial" className="h-4 px-1.5 text-[10px] gap-0.5">
-                                <Clock className="size-2.5" />
-                                ожидает
-                              </Badge>
+            <div className="space-y-1">
+              <button
+                type="button"
+                disabled={loading}
+                onClick={handleLeaveGroup}
+                className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-md text-xs font-medium text-destructive hover:bg-destructive/10 cursor-pointer"
+              >
+                <span>Покинуть группу</span>
+                <LogOut className="size-3.5 shrink-0" />
+              </button>
+            </div>
+          </div>
+
+          {/* ПРАВАЯ ОБЛАСТЬ КОНТЕНТА */}
+          <div className="flex-1 flex flex-col justify-between p-5 min-w-0 overflow-y-auto">
+            {activeTab === "members" ? (
+              <div className="flex-1 flex flex-col justify-between min-h-0">
+                <div className="space-y-4 flex-1 flex flex-col min-h-0">
+                  <div>
+                    <DialogTitle className="text-base font-semibold">
+                      Участники группы «{group.name}»
+                    </DialogTitle>
+                    <DialogDescription className="text-xs">
+                      Приглашайте участников по @username и управляйте составом группы
+                    </DialogDescription>
+                  </div>
+
+                  <form onSubmit={handleInvite} className="space-y-1.5 shrink-0">
+                    <Label>Пригласить участника по @username</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        value={usernameInput}
+                        onChange={(e) => setUsernameInput(e.target.value)}
+                        placeholder="Введите @username друга..."
+                        className="font-mono text-sm"
+                      />
+                      <Button type="submit" disabled={loading || !usernameInput.trim()}>
+                        <UserPlus className="size-3.5" />
+                        Пригласить
+                      </Button>
+                    </div>
+                  </form>
+
+                  <div className="space-y-2 border-t border-border pt-3 flex-1 flex flex-col min-h-0">
+                    <Label className="text-xs text-muted-foreground shrink-0">
+                      Состав группы ({group.members.length})
+                    </Label>
+
+                    <div className="space-y-1.5 flex-1 overflow-y-auto pr-1">
+                      {group.members.map((m) => {
+                        const isMemberOwner = m.user_id === group.owner_id;
+                        const isMe = m.user_id === currentUser.id;
+                        const cleanName = m.display_name.replace(" (Вы)", "");
+
+                        return (
+                          <div
+                            key={m.user_id}
+                            className="flex items-center justify-between gap-2 p-2.5 rounded-lg border border-border bg-background/50"
+                          >
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              <span
+                                className="size-7 rounded-full overflow-hidden flex items-center justify-center text-white font-semibold text-[11px] shrink-0"
+                                style={{
+                                  backgroundColor: m.avatar_url ? undefined : m.avatar_color,
+                                }}
+                              >
+                                {m.avatar_url ? (
+                                  <img
+                                    src={m.avatar_url}
+                                    alt={cleanName}
+                                    className="size-full object-cover"
+                                  />
+                                ) : (
+                                  cleanName.slice(0, 1).toUpperCase()
+                                )}
+                              </span>
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-1.5">
+                                  <span className="text-xs font-medium text-foreground truncate">
+                                    {cleanName}
+                                  </span>
+                                  {isMe && (
+                                    <Badge variant="secondary" className="h-4 px-1.5 text-[10px]">
+                                      Вы
+                                    </Badge>
+                                  )}
+                                  {isMemberOwner && (
+                                    <Badge
+                                      variant="outline"
+                                      className="h-4 px-1.5 text-[10px] gap-0.5"
+                                    >
+                                      <Crown className="size-2.5 text-amber-500" />
+                                      Владелец
+                                    </Badge>
+                                  )}
+                                  {m.status === "pending" && (
+                                    <Badge
+                                      variant="partial"
+                                      className="h-4 px-1.5 text-[10px] gap-0.5"
+                                    >
+                                      <Clock className="size-2.5" />
+                                      ожидает
+                                    </Badge>
+                                  )}
+                                </div>
+                                <div className="text-[11px] font-mono text-muted-foreground truncate">
+                                  @{m.username}
+                                </div>
+                              </div>
+                            </div>
+
+                            {isOwner && !isMe && (
+                              <div className="flex items-center gap-1 shrink-0">
+                                {m.status === "accepted" && (
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon-xs"
+                                    disabled={loading}
+                                    onClick={() => handleTransferOwner(m.user_id, cleanName)}
+                                    title="Передать права владельца группы"
+                                  >
+                                    <Crown className="size-3.5 text-muted-foreground hover:text-amber-500" />
+                                  </Button>
+                                )}
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon-xs"
+                                  disabled={loading}
+                                  onClick={() =>
+                                    handleRemoveMember(
+                                      m.user_id,
+                                      `@${m.username}`,
+                                      m.status === "pending"
+                                    )
+                                  }
+                                  title={
+                                    m.status === "pending"
+                                      ? "Отменить приглашение"
+                                      : "Исключить из группы"
+                                  }
+                                >
+                                  <UserMinus className="size-3.5 text-muted-foreground hover:text-destructive" />
+                                </Button>
+                              </div>
                             )}
                           </div>
-                          <div className="text-[11px] font-mono text-muted-foreground truncate">
-                            @{m.username}
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-4 mt-4 shrink-0">
+                  <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+                    Закрыть
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <form
+                onSubmit={handleSaveSettings}
+                className="flex-1 flex flex-col justify-between"
+              >
+                <div className="space-y-4">
+                  <div>
+                    <DialogTitle className="text-base font-semibold">
+                      Настройки группы «{group.name}»
+                    </DialogTitle>
+                    <DialogDescription className="text-xs">
+                      Измените название, описание или параметры группы
+                    </DialogDescription>
+                  </div>
+
+                  <div className="space-y-3 pt-1">
+                    <div className="space-y-1.5">
+                      <Label htmlFor="edit-grp-name">Название группы</Label>
+                      <Input
+                        id="edit-grp-name"
+                        value={groupName}
+                        onChange={(e) => setGroupName(e.target.value)}
+                        placeholder="Название группы"
+                        required
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <Label htmlFor="edit-grp-desc">Описание группы</Label>
+                      <Input
+                        id="edit-grp-desc"
+                        value={groupDesc}
+                        onChange={(e) => setGroupDesc(e.target.value)}
+                        placeholder="Заметка или описание для участников..."
+                      />
+                    </div>
+                  </div>
+
+                  <div className="border-t border-border pt-4 space-y-2.5">
+                    <Label className="text-xs text-muted-foreground">Действия с группой</Label>
+
+                    <div className="flex flex-col gap-2">
+                      <div className="flex items-center justify-between gap-3 p-3 rounded-lg border border-border bg-background/40">
+                        <div className="min-w-0">
+                          <div className="text-xs font-medium">Покинуть группу</div>
+                          <div className="text-[11px] text-muted-foreground">
+                            Вы перестанете видеть расписание этой группы
                           </div>
                         </div>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={loading}
+                          onClick={handleLeaveGroup}
+                          className="shrink-0"
+                        >
+                          <LogOut className="size-3.5" />
+                          Выйти
+                        </Button>
                       </div>
 
-                      {isOwner && !isMe && (
-                        <div className="flex items-center gap-1 shrink-0">
-                          {m.status === "accepted" && (
+                      {isOwner && (
+                        <div className="flex items-center justify-between gap-3 p-3 rounded-lg border border-destructive/30 bg-destructive/5">
+                          <div className="min-w-0">
+                            <div className="text-xs font-medium text-destructive">
+                              Удалить группу
+                            </div>
+                            <div className="text-[11px] text-muted-foreground">
+                              Группа и список её участников будут удалены навсегда
+                            </div>
+                          </div>
+
+                          {!confirmDelete ? (
                             <Button
                               type="button"
-                              variant="ghost"
-                              size="icon-xs"
+                              variant="destructive"
+                              size="sm"
                               disabled={loading}
-                              onClick={() => handleTransferOwner(m.user_id, cleanName)}
-                              title="Передать права владельца группы"
+                              onClick={() => setConfirmDelete(true)}
+                              className="shrink-0"
                             >
-                              <Crown className="size-3.5 text-muted-foreground hover:text-amber-500" />
+                              <Trash2 className="size-3.5" />
+                              Удалить
                             </Button>
+                          ) : (
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="xs"
+                                onClick={() => setConfirmDelete(false)}
+                              >
+                                Отмена
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="destructive"
+                                size="xs"
+                                disabled={loading}
+                                onClick={handleDeleteGroup}
+                              >
+                                Точно удалить
+                              </Button>
+                            </div>
                           )}
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon-xs"
-                            disabled={loading}
-                            onClick={() =>
-                              handleRemoveMember(
-                                m.user_id,
-                                `@${m.username}`,
-                                m.status === "pending"
-                              )
-                            }
-                            title={
-                              m.status === "pending"
-                                ? "Отменить приглашение"
-                                : "Исключить из группы"
-                            }
-                          >
-                            <UserMinus className="size-3.5 text-muted-foreground hover:text-destructive" />
-                          </Button>
                         </div>
                       )}
                     </div>
-                  );
-                })}
-              </div>
-            </div>
-          </TabsContent>
-
-          {/* ВКЛАДКА 2: НАСТРОЙКИ ГРУППЫ, ВЫХОД И УДАЛЕНИЕ */}
-          <TabsContent value="settings" className="space-y-4 pt-3">
-            <form onSubmit={handleSaveSettings} className="space-y-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="edit-grp-name">Название группы</Label>
-                <Input
-                  id="edit-grp-name"
-                  value={groupName}
-                  onChange={(e) => setGroupName(e.target.value)}
-                  placeholder="Название группы"
-                  required
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <Label htmlFor="edit-grp-desc">Описание группы</Label>
-                <Input
-                  id="edit-grp-desc"
-                  value={groupDesc}
-                  onChange={(e) => setGroupDesc(e.target.value)}
-                  placeholder="Заметка или описание для участников..."
-                />
-              </div>
-
-              <div className="flex justify-end">
-                <Button type="submit" size="sm" disabled={loading}>
-                  Сохранить изменения
-                </Button>
-              </div>
-            </form>
-
-            <div className="border-t border-border pt-3 space-y-2.5">
-              <Label className="text-xs text-muted-foreground">Действия с группой</Label>
-
-              <div className="flex flex-col gap-2">
-                <div className="flex items-center justify-between gap-3 p-2.5 rounded-lg border border-border bg-background/40">
-                  <div className="min-w-0">
-                    <div className="text-xs font-medium">Покинуть группу</div>
-                    <div className="text-[11px] text-muted-foreground">
-                      Вы перестанете видеть расписание этой группы
-                    </div>
                   </div>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    disabled={loading}
-                    onClick={handleLeaveGroup}
-                    className="shrink-0"
-                  >
-                    <LogOut className="size-3.5" />
-                    Выйти
-                  </Button>
                 </div>
 
-                {isOwner && (
-                  <div className="flex items-center justify-between gap-3 p-2.5 rounded-lg border border-destructive/30 bg-destructive/5">
-                    <div className="min-w-0">
-                      <div className="text-xs font-medium text-destructive">Удалить группу</div>
-                      <div className="text-[11px] text-muted-foreground">
-                        Группа и список её участников будут удалены навсегда
-                      </div>
-                    </div>
-
-                    {!confirmDelete ? (
-                      <Button
-                        type="button"
-                        variant="destructive"
-                        size="sm"
-                        disabled={loading}
-                        onClick={() => setConfirmDelete(true)}
-                        className="shrink-0"
-                      >
-                        <Trash2 className="size-3.5" />
-                        Удалить
-                      </Button>
-                    ) : (
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="xs"
-                          onClick={() => setConfirmDelete(false)}
-                        >
-                          Отмена
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="destructive"
-                          size="xs"
-                          disabled={loading}
-                          onClick={handleDeleteGroup}
-                        >
-                          Точно удалить
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-          </TabsContent>
-        </Tabs>
+                <div className="flex items-center justify-end gap-2 pt-4 mt-4">
+                  <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+                    Отмена
+                  </Button>
+                  <Button type="submit" disabled={loading}>
+                    Сохранить
+                  </Button>
+                </div>
+              </form>
+            )}
+          </div>
+        </div>
       </DialogContent>
     </Dialog>
   );
