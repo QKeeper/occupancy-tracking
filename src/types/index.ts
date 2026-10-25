@@ -44,10 +44,10 @@ export interface TimelineStyleConfig {
 }
 
 export interface User {
+  revision: number;
   id: number;
   username: string;
   display_name: string;
-  role_title: string;
   avatar_color: string;
   avatar_url?: string | null;
   banner_url?: string | null;

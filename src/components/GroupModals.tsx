@@ -282,6 +282,8 @@ export const GroupSettingsModal: React.FC<GroupSettingsModalProps> = ({
     try {
       const res = await fetch(`/api/groups/${group.id}/members/${targetUserId}`, {
         method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
       });
       if (!res.ok) throw new Error("Не удалось удалить участника");
 
@@ -322,6 +324,8 @@ export const GroupSettingsModal: React.FC<GroupSettingsModalProps> = ({
     try {
       const res = await fetch(`/api/groups/${group.id}/members/${currentUser.id}`, {
         method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
       });
       if (!res.ok) throw new Error("Не удалось покинуть группу");
 
@@ -340,6 +344,8 @@ export const GroupSettingsModal: React.FC<GroupSettingsModalProps> = ({
     try {
       const res = await fetch(`/api/groups/${group.id}`, {
         method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
       });
       if (!res.ok) throw new Error("Не удалось удалить группу");
 

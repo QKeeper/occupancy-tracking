@@ -40,6 +40,7 @@ export const ScheduleProfileModal: React.FC<ScheduleProfileModalProps> = ({
   onSaveUser,
 }) => {
   const [saving, setSaving] = useState(false);
+  const [editRevision, setEditRevision] = useState(user.revision);
 
   const defaultWeekly: Record<string, DayWeeklySchedule> = {
     "1": { isWorking: true, slots: [{ start: "09:00", end: "18:00" }] },
@@ -66,13 +67,14 @@ export const ScheduleProfileModal: React.FC<ScheduleProfileModalProps> = ({
 
   React.useEffect(() => {
     if (open) {
+      setEditRevision(user.revision);
       setConfig({
         mode: user.schedule_config?.mode || "fixed_weekly",
         weekly: { ...defaultWeekly, ...(user.schedule_config?.weekly || {}) },
         shift: { ...defaultShift, ...(user.schedule_config?.shift || {}) },
       });
     }
-  }, [open, user]);
+  }, [open, user.id]);
 
   const handleToggleWeeklyDay = (dayKey: string, checked: boolean) => {
     setConfig((prev) => {
@@ -145,6 +147,7 @@ export const ScheduleProfileModal: React.FC<ScheduleProfileModalProps> = ({
     setSaving(true);
     try {
       await onSaveUser({
+        revision: editRevision,
         schedule_config: config,
       });
       toast.success("График сохранён");

@@ -23,7 +23,7 @@ interface DayOverrideModalProps {
   onOpenChange: (open: boolean) => void;
   user: User | null;
   date: Date | null;
-  onSaveOverride: (userId: number, dateStr: string, override: DayOverride | null) => Promise<void>;
+  onSaveOverride: (userId: number, dateStr: string, override: DayOverride | null, expectedOverride?: DayOverride | null) => Promise<void>;
 }
 
 export const DayOverrideModal: React.FC<DayOverrideModalProps> = ({
@@ -37,10 +37,12 @@ export const DayOverrideModal: React.FC<DayOverrideModalProps> = ({
   const [slots, setSlots] = useState<TimeSlot[]>([]);
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
+  const [expectedOverride, setExpectedOverride] = useState<DayOverride | null>(null);
 
   useEffect(() => {
     if (open && user && date) {
       const computed = getUserDaySchedule(user, date);
+      setExpectedOverride(user.overrides?.[format(date, "yyyy-MM-dd")] ?? null);
       setStatus(computed.status);
       setSlots(
         computed.slots.length > 0
@@ -49,7 +51,7 @@ export const DayOverrideModal: React.FC<DayOverrideModalProps> = ({
       );
       setNote(computed.note || "");
     }
-  }, [open, user, date]);
+  }, [open, user?.id, date?.getTime()]);
 
   if (!user || !date) return null;
 
@@ -65,7 +67,7 @@ export const DayOverrideModal: React.FC<DayOverrideModalProps> = ({
         status,
         slots: finalSlots,
         note: note.trim() || undefined,
-      });
+      }, expectedOverride);
       toast.success("Сохранено");
       onOpenChange(false);
     } catch (e: any) {
@@ -78,7 +80,7 @@ export const DayOverrideModal: React.FC<DayOverrideModalProps> = ({
   const handleResetToDefault = async () => {
     setSaving(true);
     try {
-      await onSaveOverride(user.id, dateStr, null);
+      await onSaveOverride(user.id, dateStr, null, expectedOverride);
       toast.info("Сброшено к базовому графику");
       onOpenChange(false);
     } catch (e: any) {

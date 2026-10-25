@@ -49,11 +49,12 @@ const STORAGE_MEMBER_ORDERS_KEY = "syncro_member_orders";
 function persistSavedAccounts(accounts: SavedAccount[]) {
   try {
     // Store only lightweight fields in localStorage to avoid QuotaExceededError on large base64 GIF/PNG avatars
-    const compact = accounts.map(({ id, username, display_name, avatar_color }) => ({
+    const compact = accounts.map(({ id, username, display_name, avatar_color, avatar_url }) => ({
       id,
       username,
       display_name,
       avatar_color,
+      avatar_url: avatar_url?.startsWith("data:") ? undefined : avatar_url,
     }));
     localStorage.setItem(STORAGE_SAVED_ACCOUNTS_KEY, JSON.stringify(compact));
   } catch (err) {
@@ -72,7 +73,7 @@ export function App() {
       const raw = localStorage.getItem(STORAGE_SAVED_ACCOUNTS_KEY);
       if (!raw) return [];
       const parsed = JSON.parse(raw);
-      return Array.isArray(parsed) ? parsed : [];
+      return Array.isArray(parsed) ? parsed.map(acc => ({ ...acc, requiresPassword: true })) : [];
     } catch {
       return [];
     }
@@ -96,6 +97,7 @@ export function App() {
 
   // Unauthenticated screen form states
   const [loginUsername, setLoginUsername] = useState("");
+  const [unauthTab, setUnauthTab] = useState("login");
   const [loginPassword, setLoginPassword] = useState("");
   const [loginErrors, setLoginErrors] = useState<Record<string, string>>({});
 
@@ -200,6 +202,7 @@ export function App() {
   }>({ open: false, tab: "members" });
   const [cabinetModalOpen, setCabinetModalOpen] = useState(false);
   const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [authUsername, setAuthUsername] = useState("");
   const [overrideTarget, setOverrideTarget] = useState<{
     user: User | null;
     date: Date | null;
@@ -222,21 +225,10 @@ export function App() {
 
   const fetchAllData = useCallback(async (preferredUserId?: number, preferredGroupId?: number) => {
     try {
-      const savedUserIdStr = localStorage.getItem(STORAGE_USER_ID_KEY);
-      const savedUserId = savedUserIdStr ? parseInt(savedUserIdStr, 10) : undefined;
-      const targetUserId = preferredUserId ?? currentUserRef.current?.id ?? savedUserId;
-
-      if (!targetUserId) {
-        setCurrentUser(null);
-        setGroups([]);
-        setLoading(false);
-        return;
-      }
-
-      const [uRes, gRes] = await Promise.all([
-        fetch(`/api/users/${targetUserId}`),
-        fetch(`/api/groups?userId=${targetUserId}`),
-      ]);
+      const uRes = await fetch("/api/auth/me");
+      const activeIdentity = uRes.ok ? await uRes.clone().json() : null;
+      const targetUserId = activeIdentity?.id;
+      const gRes = targetUserId ? await fetch(`/api/groups?userId=${targetUserId}`) : null;
 
       if (!uRes.ok) {
         // Stored user no longer exists -> log out
@@ -249,7 +241,7 @@ export function App() {
 
       const [activeUser, groupsData]: [User, Group[]] = await Promise.all([
         uRes.json(),
-        gRes.json(),
+        gRes?.ok ? gRes.json() : [],
       ]);
 
       setCurrentUser(activeUser);
@@ -262,6 +254,7 @@ export function App() {
           display_name: activeUser.display_name,
           avatar_color: activeUser.avatar_color,
           avatar_url: activeUser.avatar_url,
+          requiresPassword: false,
         };
         const existsIdx = prev.findIndex((a) => a.id === activeUser.id);
         let next: SavedAccount[];
@@ -297,45 +290,35 @@ export function App() {
     fetchAllData();
   }, [fetchAllData]);
 
-  // Hydrate avatar_url and latest profile info for saved accounts in a single lightweight batch request
+  const savedAccountIds = savedAccounts.map(account => account.id).join(",");
+  // Refresh before login too. The endpoint returns only card metadata and verifies
+  // remembered sessions against this browser's HttpOnly cookies.
   useEffect(() => {
-    const missingIds = savedAccounts
-      .filter((acc) => acc.avatar_url === undefined)
-      .map((acc) => acc.id);
-    if (missingIds.length === 0) return;
-
+    if (!savedAccountIds) return;
     let cancelled = false;
-    fetch(`/api/users-mini?ids=${missingIds.join(",")}`)
-      .then((res) => (res.ok ? res.json() : []))
-      .then((rows: SavedAccount[]) => {
-        if (cancelled || !Array.isArray(rows) || rows.length === 0) return;
-        const map = new Map(rows.map((r) => [r.id, r]));
-        setSavedAccounts((prev) => {
-          const next = prev.map((acc) => {
-            const fresh = map.get(acc.id);
-            return fresh
-              ? {
-                  id: fresh.id,
-                  username: fresh.username,
-                  display_name: fresh.display_name,
-                  avatar_color: fresh.avatar_color,
-                  avatar_url: fresh.avatar_url ?? null,
-                }
-              : acc;
-          });
+    const refresh = async () => {
+      try {
+        const res = await fetch(`/api/auth/accounts?ids=${savedAccountIds}`, { cache: "no-store" });
+        if (!res.ok) return;
+        const rows: SavedAccount[] = await res.json();
+        if (cancelled || !Array.isArray(rows)) return;
+        const byId = new Map(rows.map(account => [account.id, account]));
+        setSavedAccounts(prev => {
+          const next = prev.map(account => byId.get(account.id) ?? { ...account, requiresPassword: true });
           persistSavedAccounts(next);
           return next;
         });
-      })
-      .catch(() => {});
-
-    return () => {
-      cancelled = true;
+      } catch { /* Keep cached cards when offline. */ }
     };
-  }, [savedAccounts.length]);
+    void refresh();
+    window.addEventListener("focus", refresh);
+    const timer = window.setInterval(refresh, 60_000);
+    return () => { cancelled = true; window.removeEventListener("focus", refresh); window.clearInterval(timer); };
+  }, [savedAccountIds, currentUser?.id]);
 
   // Real-time Server-Sent Events (SSE) subscription
   useEffect(() => {
+    if (!currentUser) return;
     const evtSource = new EventSource("/api/events");
     evtSource.onmessage = (event) => {
       try {
@@ -350,7 +333,7 @@ export function App() {
     return () => {
       evtSource.close();
     };
-  }, [fetchAllData]);
+  }, [fetchAllData, currentUser?.id]);
 
   const activeGroup = useMemo(
     () => groups.find((g) => g.id === activeGroupId && g.my_status === "accepted") || null,
@@ -370,13 +353,13 @@ export function App() {
         id: m.user_id,
         username: m.username,
         display_name: m.display_name,
-        role_title: m.role_title,
         avatar_color: m.avatar_color,
         avatar_url: m.avatar_url,
         banner_url: m.banner_url,
         timeline_style: m.timeline_style,
         schedule_config: m.schedule_config,
         overrides: m.overrides,
+        revision: m.revision,
       }));
 
     const localKey = currentUser ? `${currentUser.id}:${activeGroup.id}` : `${activeGroup.id}`;
@@ -433,7 +416,11 @@ export function App() {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ groupKey, memberIds: newMemberIds }),
-      }).catch(() => {});
+      }).then(async (res) => {
+        if (!res.ok) throw new Error("Не удалось сохранить порядок участников");
+        const data = await res.json();
+        setCurrentUser(prev => prev?.id === currentUser.id ? { ...prev, revision: Math.max(prev.revision, data.revision) } : prev);
+      }).catch(() => toast.error("Не удалось сохранить порядок участников"));
     },
     [currentUser, activeGroup]
   );
@@ -453,36 +440,34 @@ export function App() {
     const res = await fetch(`/api/users/${currentUser.id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(updated),
+      body: JSON.stringify({ revision: currentUser.revision, ...updated }),
     });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "Не удалось обновить профиль");
+    if (!res.ok) { if (res.status === 409) await fetchAllData(currentUser.id); throw new Error(data.error || "Не удалось обновить профиль"); }
     await fetchAllData(currentUser.id);
   };
 
   const handleSaveDayOverride = async (
     userId: number,
     dateStr: string,
-    override: DayOverride | null
+    override: DayOverride | null,
+    expectedOverride?: DayOverride | null
   ) => {
     if (!currentUser || userId !== currentUser.id) {
       toast.error("Редактировать можно только свой собственный график");
       return;
     }
 
-    const nextOverrides = { ...(currentUser.overrides || {}) };
-    if (override === null) {
-      delete nextOverrides[dateStr];
-    } else {
-      nextOverrides[dateStr] = override;
-    }
-
-    const res = await fetch(`/api/users/${currentUser.id}`, {
-      method: "PUT",
+    const res = await fetch(`/api/users/${currentUser.id}/overrides/${dateStr}`, {
+      method: override === null ? "DELETE" : "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ overrides: nextOverrides }),
+      body: JSON.stringify({
+        expectedOverride: expectedOverride === undefined ? currentUser.overrides?.[dateStr] ?? null : expectedOverride,
+        ...(override === null ? {} : { override }),
+      }),
     });
-    if (!res.ok) throw new Error("Ошибка сохранения дня");
+    const data = await res.json();
+    if (!res.ok) { if (res.status === 409) await fetchAllData(currentUser.id); throw new Error(data.error || "Ошибка сохранения дня"); }
     await fetchAllData(currentUser.id);
   };
 
@@ -524,6 +509,9 @@ export function App() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Ошибка входа");
+      setAuthModalOpen(false);
+      setCabinetModalOpen(false);
+      setLoginPassword("");
       localStorage.setItem(STORAGE_USER_ID_KEY, String(data.id));
       toast.success(`Вы вошли как @${data.username}`);
       await fetchAllData(data.id);
@@ -564,6 +552,9 @@ export function App() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Ошибка регистрации");
+      setAuthModalOpen(false);
+      setCabinetModalOpen(false);
+      setLoginPassword("");
       localStorage.setItem(STORAGE_USER_ID_KEY, String(data.id));
       toast.success(`Аккаунт @${data.username} создан`);
       await fetchAllData(data.id);
@@ -574,7 +565,9 @@ export function App() {
     }
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    const response = await fetch("/api/auth/logout", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    if (!response.ok && response.status !== 401) { toast.error("Не удалось завершить сессию"); return; }
     localStorage.removeItem(STORAGE_USER_ID_KEY);
     localStorage.removeItem(STORAGE_GROUP_ID_KEY);
     setCurrentUser(null);
@@ -583,10 +576,36 @@ export function App() {
     setSelectedMemberIds([]);
   };
 
+  const promptSavedAccountLogin = (account: SavedAccount) => {
+    setAuthUsername(account.username);
+    setLoginUsername(account.username);
+    setLoginPassword("");
+    setLoginErrors({});
+    setUnauthTab("login");
+    setCabinetModalOpen(false);
+    // The initial login page already contains a form; do not leave a hidden
+    // modal flag that would open after successful authentication.
+    setAuthModalOpen(Boolean(currentUser));
+  };
+
   const handleSelectSavedAccount = async (accountId: number) => {
-    localStorage.setItem(STORAGE_USER_ID_KEY, String(accountId));
-    setSelectedMemberIds([]);
-    await fetchAllData(accountId);
+    const account = savedAccounts.find(item => item.id === accountId);
+    if (!account) return;
+    if (account.requiresPassword) { promptSavedAccountLogin(account); return; }
+    try {
+      const response = await fetch("/api/auth/switch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userId: accountId }) });
+      if (response.status === 401) {
+        setSavedAccounts(prev => prev.map(item => item.id === accountId ? { ...item, requiresPassword: true } : item));
+        promptSavedAccountLogin(account);
+        return;
+      }
+      if (!response.ok) throw new Error("Не удалось переключить аккаунт");
+      setAuthModalOpen(false);
+      setCabinetModalOpen(false);
+      localStorage.setItem(STORAGE_USER_ID_KEY, String(accountId));
+      setSelectedMemberIds([]);
+      await fetchAllData(accountId);
+    } catch (err: any) { toast.error(err.message || "Ошибка переключения аккаунта"); }
   };
 
   const handleRemoveSavedAccount = (accountId: number) => {
@@ -699,6 +718,9 @@ export function App() {
                           @{acc.username}
                         </div>
                       </div>
+                      {acc.requiresPassword && (
+                        <span className="ml-auto shrink-0 text-[10px] font-medium text-amber-600 dark:text-amber-400">Нужен пароль</span>
+                      )}
                     </button>
                     <Button
                       type="button"
@@ -716,7 +738,7 @@ export function App() {
             </div>
           )}
 
-          <Tabs defaultValue="login">
+          <Tabs value={unauthTab} onValueChange={setUnauthTab}>
             <TabsList className="grid w-full grid-cols-2">
               <TabsTrigger value="login">Вход</TabsTrigger>
               <TabsTrigger value="register">Регистрация</TabsTrigger>
@@ -1242,19 +1264,24 @@ export function App() {
         savedAccounts={savedAccounts}
         onSelectSavedAccount={handleSelectSavedAccount}
         onRemoveSavedAccount={handleRemoveSavedAccount}
-        onOpenAddAccount={() => setAuthModalOpen(true)}
+        onOpenAddAccount={() => { setAuthUsername(""); setAuthModalOpen(true); }}
         onLogout={handleLogout}
       />
 
       <AuthModal
         open={authModalOpen}
         onOpenChange={setAuthModalOpen}
-        onSelectUser={(u) => {
+        initialUsername={authUsername}
+        onSelectUser={async (u) => {
+          setAuthModalOpen(false);
+          setCabinetModalOpen(false);
           localStorage.setItem(STORAGE_USER_ID_KEY, String(u.id));
           setSelectedMemberIds([]);
-          fetchAllData(u.id);
+          await fetchAllData(u.id);
         }}
         onUserRegistered={async (u) => {
+          setAuthModalOpen(false);
+          setCabinetModalOpen(false);
           localStorage.setItem(STORAGE_USER_ID_KEY, String(u.id));
           setSelectedMemberIds([]);
           await fetchAllData(u.id);

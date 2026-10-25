@@ -1,0 +1,227 @@
+// Run: node --test server/security.test.cjs
+// Uses an isolated temporary PostgreSQL schema; never writes application tables.
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const net = require('node:net');
+const crypto = require('node:crypto');
+const { createRequire } = require('node:module');
+const { spawn } = require('node:child_process');
+const pg = require('pg');
+const dotenv = require('dotenv');
+const root = path.resolve(__dirname, '..');
+const esbuild = createRequire(require.resolve('vite/package.json'))('esbuild');
+
+test('sessions, password migration, permissions, validation and concurrent saves', { timeout: 60000 }, async t => {
+  const env = dotenv.parse(fs.readFileSync(path.join(root,'.env')));
+  const admin = new pg.Client({connectionString:process.env.DATABASE_URL || env.DATABASE_URL});
+  await admin.connect();
+  const schema = 'security_test_'+crypto.randomBytes(8).toString('hex');
+  const scratch = fs.mkdtempSync(path.join(process.env.SECURITY_TEST_WORKDIR || os.tmpdir(),'occupancy-security-'));
+  let child;
+  try {
+    await admin.query(`CREATE SCHEMA "${schema}"`);
+    await admin.query(`CREATE TABLE "${schema}".users (
+      id SERIAL PRIMARY KEY, username VARCHAR(64) UNIQUE NOT NULL,display_name VARCHAR(128) NOT NULL,
+      password VARCHAR(128) NOT NULL DEFAULT 'admin',role_title VARCHAR(128) DEFAULT 'Участник',
+      avatar_color VARCHAR(32) DEFAULT '#3B82F6',schedule_config JSONB NOT NULL DEFAULT '{}',
+      overrides JSONB NOT NULL DEFAULT '{}',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )`);
+    const secret = crypto.randomBytes(16).toString('hex');
+    await admin.query(`INSERT INTO "${schema}".users(username,display_name,password,schedule_config) VALUES('legacy_user','Legacy',$1,'{"mode":"manual"}')`, [secret]);
+    const iconData='data:image/svg+xml;base64,'+Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M2 2h20v20H2z" fill="black"/></svg>').toString('base64');
+    const legacyStyle={bgColor:'#e11d48',patternColor:'#fda4af',patternType:'symbols',symbol:iconData,iconHistory:[iconData,'⚡']};
+    await admin.query(`ALTER TABLE "${schema}".users ADD COLUMN timeline_style JSONB NOT NULL DEFAULT '{"bgColor":"#e11d48","patternColor":"#fda4af","patternType":"stripes","symbol":"⚡"}'`);
+    await admin.query(`UPDATE "${schema}".users SET timeline_style=$1 WHERE username='legacy_user'`,[JSON.stringify(legacyStyle)]);
+    const dbUrl = new URL(process.env.DATABASE_URL || env.DATABASE_URL);
+    dbUrl.searchParams.set('options',`-c search_path=${schema}`);
+    const bundle = path.join(scratch,'server.cjs');
+    esbuild.buildSync({entryPoints:[path.join(root,'server/index.ts')],outfile:bundle,bundle:true,packages:'external',platform:'node',format:'cjs',tsconfig:path.join(root,'tsconfig.json'),logLevel:'silent'});
+    const portProbe = net.createServer();
+    await new Promise(r=>portProbe.listen(0,'127.0.0.1',r));
+    const port = portProbe.address().port;
+    await new Promise(r=>portProbe.close(r));
+    let logs='';
+    child = spawn(process.execPath,[bundle],{cwd:scratch,windowsHide:true,stdio:['ignore','pipe','pipe'],env:{...process.env,DATABASE_URL:dbUrl.toString(),PORT:String(port),NODE_PATH:path.join(root,'node_modules')}});
+    child.stdout.on('data',b=>logs+=b); child.stderr.on('data',b=>logs+=b);
+    const base=`http://127.0.0.1:${port}`;
+    let ready=false;
+    for(let i=0;i<100;i++){
+      try{const r=await fetch(base+'/api/auth/me');if(r.status===401){ready=true;break;}}catch{}
+      if(child.exitCode!==null)break;
+      await new Promise(r=>setTimeout(r,100));
+    }
+    assert.ok(ready,'isolated server started: '+logs.replace(/postgres(?:ql)?:\/\/\S+/g,'[redacted]'));
+    const call=async(method,url,body,cookie='',extra={})=>{
+      const r=await fetch(base+url,{method,headers:{...(method==='GET'?{}:{'Content-Type':'application/json'}),...(cookie?{Cookie:cookie}:{}),...extra},...(method==='GET'?{}:{body:JSON.stringify(body ?? {})})});
+      return {status:r.status,data:await r.json(),cookies:r.headers.getSetCookie().map(s=>s.split(';')[0]).join('; '),raw:r};
+    };
+    let a,b,c;
+    await t.test('legacy passwords migrate without changing the password', async()=>{
+      const row=(await admin.query(`SELECT password FROM "${schema}".users`)).rows[0];
+      assert.match(row.password,/^scrypt\$/); assert.notEqual(row.password,secret);
+      a=await call('POST','/api/auth/login',{username:'legacy_user',password:secret});
+      assert.equal(a.status,200);assert.ok(a.cookies.includes('syncro_session='));
+      assert.ok(a.raw.headers.getSetCookie().every(v=>v.includes('HttpOnly')&&v.includes('SameSite=Strict')));
+      assert.equal(a.data.password,undefined);
+    });
+    await t.test('registration hashes passwords and wrong password fails',async()=>{
+      b=await call('POST','/api/auth/register',{username:'member_user',display_name:'Member',password:secret});
+      c=await call('POST','/api/auth/register',{username:'outsider_user',display_name:'Outsider',password:secret});
+      assert.equal(b.status,200);assert.equal(c.status,200);
+      const hashes=(await admin.query(`SELECT password FROM "${schema}".users`)).rows;
+      assert.ok(hashes.every(v=>v.password.startsWith('scrypt$')));assert.notEqual(hashes[1].password,hashes[2].password);
+      assert.equal((await call('POST','/api/auth/login',{username:'legacy_user',password:'wrong'})).status,401);
+    });
+    await t.test('role_title is dropped and legacy pattern icons become files',async()=>{
+      const cols=await admin.query("SELECT 1 FROM information_schema.columns WHERE table_schema=$1 AND table_name='users' AND column_name='role_title'",[schema]);
+      assert.equal(cols.rows.length,0);assert.equal('role_title' in a.data,false);
+      const stored=(await admin.query(`SELECT timeline_style FROM "${schema}".users WHERE id=$1`,[a.data.id])).rows[0].timeline_style;
+      assert.match(stored.symbol,/^\/uploads\/icon_[a-f0-9]{20}\.png$/);
+      assert.deepEqual(stored.iconHistory,[stored.symbol,'⚡']);
+      assert.equal(JSON.stringify(stored).includes('data:'),false);
+      assert.ok(fs.existsSync(path.join(scratch,stored.symbol)));
+    });
+    await t.test('new icon uploads and profile writes never persist data URLs; generated tiles render',async()=>{
+      const upload=await call('POST','/api/upload',{kind:'icon',dataUrl:iconData},a.cookies);
+      assert.equal(upload.status,200);assert.match(upload.data.url,/^\/uploads\/icon_[a-f0-9]{20}\.png$/);
+      const me=(await call('GET','/api/auth/me',undefined,a.cookies)).data;
+      const save=await call('PUT',`/api/users/${a.data.id}`,{revision:me.revision,timeline_style:legacyStyle},a.cookies);
+      assert.equal(save.status,200);assert.equal(save.data.timeline_style.symbol,upload.data.url);
+      assert.equal(JSON.stringify(save.data.timeline_style).includes('data:'),false);
+      const query=new URLSearchParams({icon:upload.data.url,color:'#abcdef',scale:'1.5'});
+      const tile=await fetch(base+'/api/pattern-tile?'+query,{headers:{Cookie:a.cookies}});
+      assert.equal(tile.status,200);assert.match(tile.headers.get('content-type'),/image\/svg\+xml/);
+      const svg=await tile.text();assert.ok(svg.includes('#abcdef'));
+      const raster=await require('sharp')(Buffer.from(svg)).ensureAlpha().raw().toBuffer();
+      let visible=false;
+      for(let i=0;i<raster.length;i+=4)if(raster[i+3]>0){visible=true;break;}
+      assert.ok(visible,'file-backed icon remains visible inside a standalone SVG tile');
+      assert.equal((await call('POST','/api/upload',{kind:'icon',dataUrl:'data:text/html;base64,WA=='},a.cookies)).status,400);
+      const invalid=await fetch(base+'/api/pattern-tile?'+new URLSearchParams({icon:'/../../secret',color:'#abcdef',scale:'1'}),{headers:{Cookie:a.cookies}});
+      assert.equal(invalid.status,400);
+      // A second migration must preserve file URLs and revision.
+      const built=esbuild.buildSync({entryPoints:[path.join(root,'server/pattern-media.ts')],bundle:true,packages:'external',platform:'node',format:'cjs',write:false,logLevel:'silent'}).outputFiles[0].text;
+      const mod={exports:{}};new Function('require','module','exports',built)(require,mod,mod.exports);
+      const db=new pg.Client({connectionString:dbUrl.toString()});await db.connect();
+      try {
+        const before=(await db.query('SELECT timeline_style,revision FROM users WHERE id=$1',[a.data.id])).rows[0];
+        await mod.exports.createPatternMedia(path.join(scratch,'uploads')).migrate(db);
+        const after=(await db.query('SELECT timeline_style,revision FROM users WHERE id=$1',[a.data.id])).rows[0];
+        assert.deepEqual(after,before);
+      } finally {await db.end();}
+    });
+    await t.test('identity cannot be replaced by a URL, body or local account id',async()=>{
+      assert.equal((await call('PUT',`/api/users/${a.data.id}`,{revision:0,display_name:'forged'})).status,401);
+      assert.equal((await call('PUT',`/api/users/${a.data.id}`,{revision:0,display_name:'forged'},b.cookies)).status,403);
+      assert.equal((await call('POST','/api/auth/switch',{userId:a.data.id},b.cookies)).status,401);
+      assert.equal((await call('POST','/api/groups',{name:'forged',owner_id:a.data.id},b.cookies)).status,403);
+      assert.equal((await call('GET',`/api/groups?userId=${a.data.id}`,undefined,b.cookies)).status,403);
+      assert.equal((await call('PUT',`/api/users/${a.data.id}invalid`,{revision:0,display_name:'forged'},b.cookies)).status,400);
+    });
+    await t.test('switching saved accounts requires a valid cookie for that account',async()=>{
+      const jar=Object.fromEntries((a.cookies+'; '+b.cookies).split('; ').map(v=>v.split('=')));
+      const cookie=Object.entries(jar).map(([k,v])=>k+'='+v).join('; ');
+      const switched=await call('POST','/api/auth/switch',{userId:a.data.id},cookie);
+      assert.equal(switched.status,200);
+      assert.equal((await call('GET','/api/auth/me',undefined,switched.cookies)).data.id,a.data.id);
+    });
+    await t.test('saved account cards include avatars and cookie-verified login status before authentication',async()=>{
+      await admin.query(`UPDATE "${schema}".users SET avatar_url='/uploads/test-avatar.webp' WHERE id=$1`,[a.data.id]);
+      const url=`/api/auth/accounts?ids=${a.data.id},${b.data.id}`;
+      const anonymous=await call('GET',url);
+      assert.equal(anonymous.status,200);
+      assert.ok(anonymous.data.every(account=>account.requiresPassword));
+      const card=anonymous.data.find(account=>account.id===a.data.id);
+      assert.equal(card.avatar_url,'/uploads/test-avatar.webp');
+      assert.equal(card.password,undefined);assert.equal(card.schedule_config,undefined);assert.equal(card.overrides,undefined);
+      assert.equal(anonymous.raw.headers.get('cache-control'),'no-store');
+      const authenticated=await call('GET',url,undefined,a.cookies);
+      assert.equal(authenticated.data.find(account=>account.id===a.data.id).requiresPassword,false);
+      assert.equal(authenticated.data.find(account=>account.id===b.data.id).requiresPassword,true);
+      const forged=await call('GET',url,undefined,`syncro_session_${b.data.id}=${a.cookies.split('; ')[0].split('=')[1]}`);
+      assert.ok(forged.data.every(account=>account.requiresPassword));
+    });
+    const override={status:'working',slots:[{start:'06:00',end:'14:00'},{start:'10:00',end:'16:00'}]};
+    await t.test('different days save concurrently; same-day stale writes and deletes conflict',async()=>{
+      const both=await Promise.all(['2026-10-27','2026-10-28'].map(date=>call('PUT',`/api/users/${a.data.id}/overrides/${date}`,{expectedOverride:null,override},a.cookies)));
+      assert.deepEqual(both.map(r=>r.status),[200,200]);
+      const me=await call('GET','/api/auth/me',undefined,a.cookies);
+      assert.equal(Object.keys(me.data.overrides).length,2);assert.equal(me.data.overrides['2026-10-27'].slots.length,2);
+      assert.equal((await call('PUT',`/api/users/${a.data.id}/overrides/2026-10-27`,{expectedOverride:null,override},a.cookies)).status,409);
+      assert.equal((await call('DELETE',`/api/users/${a.data.id}/overrides/2026-10-27`,{expectedOverride:null},a.cookies)).status,409);
+      assert.equal((await call('DELETE',`/api/users/${a.data.id}/overrides/2026-10-27`,{expectedOverride:override},a.cookies)).status,200);
+      assert.ok((await call('GET','/api/auth/me',undefined,a.cookies)).data.overrides['2026-10-28']);
+    });
+    await t.test('profile CAS rejects stale versions and preserves schedule fields',async()=>{
+      const me=(await call('GET','/api/auth/me',undefined,a.cookies)).data;
+      assert.equal((await call('PUT',`/api/users/${a.data.id}`,{revision:me.revision,display_name:'Renamed'},a.cookies)).status,200);
+      assert.equal((await call('PUT',`/api/users/${a.data.id}`,{revision:me.revision,schedule_config:{mode:'manual'}},a.cookies)).status,409);
+      const latest=(await call('GET','/api/auth/me',undefined,a.cookies)).data;
+      assert.deepEqual(latest.overrides,me.overrides);
+    });
+    await t.test('malformed dates, times, cycles and bypass via profile/schedule are rejected',async()=>{
+      for(const [date,value] of [['2026-02-30',override],['2026-10-27',{...override,slots:[{start:'25:00',end:'26:00'}]}],['2026-10-27',{...override,slots:[{start:'10:00',end:'10:00'}]}],['2026-10-27',{...override,status:'invalid'}]]){
+        assert.equal((await call('PUT',`/api/users/${a.data.id}/overrides/${date}`,{expectedOverride:null,override:value},a.cookies)).status,400);
+      }
+      const me=(await call('GET','/api/auth/me',undefined,a.cookies)).data;
+      assert.equal((await call('PUT',`/api/users/${a.data.id}`,{revision:me.revision,schedule_config:{mode:'shift_cycle',shift:{workDays:0,offDays:0,startDate:'2026-10-27',slots:[]}}},a.cookies)).status,400);
+      assert.equal((await call('PATCH',`/api/users/${a.data.id}/schedule`,{revision:me.revision,mode:'fixed_weekly'},a.cookies)).status,400);
+      assert.equal((await call('PUT',`/api/users/${a.data.id}`,{revision:me.revision,overrides:{'invalid':override}},a.cookies)).status,400);
+      const night={status:'working',slots:[{start:'22:00',end:'06:00'},{start:'20:00',end:'24:00'}]};
+      assert.equal((await call('PUT',`/api/users/${a.data.id}/overrides/2026-10-29`,{expectedOverride:null,override:night},a.cookies)).status,200);
+    });
+    await t.test('JSON member-order updates preserve other groups',async()=>{
+      const r=await Promise.all(['one','two'].map(groupKey=>call('PUT',`/api/users/${a.data.id}/member-order`,{groupKey,memberIds:[a.data.id,b.data.id]},a.cookies)));
+      assert.ok(r.every(v=>v.status===200));
+      assert.equal(Object.keys((await call('GET','/api/auth/me',undefined,a.cookies)).data.member_orders).length,2);
+    });
+    await t.test('group permissions, pending invitations, ownership and leave are enforced',async()=>{
+      const created=await call('POST','/api/groups',{name:'Test',owner_id:a.data.id},a.cookies);assert.equal(created.status,200);
+      const gid=created.data.id;
+      assert.equal((await call('DELETE',`/api/groups/${gid}`,{},b.cookies)).status,403);
+      assert.equal((await call('POST',`/api/groups/${gid}/invite`,{username:'outsider_user'},b.cookies)).status,403);
+      assert.equal((await call('POST',`/api/groups/${gid}/invite`,{username:'member_user'},a.cookies)).status,200);
+      assert.equal((await call('POST',`/api/groups/${gid}/respond`,{user_id:b.data.id,action:'accept'},c.cookies)).status,403);
+      assert.equal((await call('POST',`/api/groups/${gid}/respond`,{action:'accept'},b.cookies)).status,200);
+      assert.equal((await call('PUT',`/api/groups/${gid}`,{name:'forged'},b.cookies)).status,403);
+      assert.equal((await call('DELETE',`/api/groups/${gid}/members/${a.data.id}`,{},b.cookies)).status,403);
+      assert.equal((await call('POST',`/api/groups/${gid}/transfer-owner`,{new_owner_id:c.data.id},a.cookies)).status,400);
+      assert.equal((await call('DELETE',`/api/groups/${gid}/members/${a.data.id}`,{},a.cookies)).status,200);
+      const group=(await call('GET','/api/groups',undefined,b.cookies)).data[0];assert.equal(group.owner_id,b.data.id);
+      assert.equal((await call('POST',`/api/groups/${gid}/respond`,{action:'decline'},b.cookies)).status,409);
+      assert.equal((await call('DELETE',`/api/groups/${gid}`,{},b.cookies)).status,200);
+    });
+    await t.test('cross-origin writes and expired/revoked sessions fail',async()=>{
+      assert.equal((await call('POST','/api/groups',{name:'x'},a.cookies,{Origin:'https://evil.example'})).status,403);
+      const expired=crypto.randomBytes(32).toString('hex');
+      await admin.query(`INSERT INTO "${schema}".auth_sessions VALUES($1,$2,CURRENT_TIMESTAMP-INTERVAL '1 minute')`,[crypto.createHash('sha256').update(expired).digest('hex'),a.data.id]);
+      assert.equal((await call('GET','/api/auth/me',undefined,'syncro_session='+expired)).status,401);
+      assert.equal((await call('POST','/api/auth/logout',{},b.cookies)).status,200);
+      assert.equal((await call('GET','/api/auth/me',undefined,b.cookies)).status,401);
+      const cards=await call('GET',`/api/auth/accounts?ids=${b.data.id}`,undefined,b.cookies);
+      assert.equal(cards.data[0].requiresPassword,true);
+    });
+    await t.test('API documentation describes authentication and conflict checks',async()=>{
+      const r=await call('GET','/api/openapi.json');assert.equal(r.status,200);
+      assert.ok(r.data.components.securitySchemes.cookieSession);
+      assert.ok(r.data.components.schemas.UpdateUserRequest.required.includes('revision'));
+      assert.ok(r.data.paths['/api/users/{id}/overrides/{date}'].put.requestBody.content['application/json'].schema.required.includes('expectedOverride'));
+    });
+    await t.test('password change revokes old sessions and preserves new login',async()=>{
+      const oldCookies=a.cookies;
+      const changed=await call('POST',`/api/users/${a.data.id}/change-password`,{currentPassword:secret,newPassword:'new-'+secret},a.cookies);
+      assert.equal(changed.status,200);assert.equal((await call('GET','/api/auth/me',undefined,oldCookies)).status,401);
+      assert.equal((await call('GET','/api/auth/me',undefined,changed.cookies)).status,200);
+      assert.equal((await call('POST','/api/auth/login',{username:'legacy_user',password:secret})).status,401);
+      assert.equal((await call('POST','/api/auth/login',{username:'legacy_user',password:'new-'+secret})).status,200);
+    });
+  } finally {
+    if(child && child.exitCode===null){ child.kill(); await new Promise(r=>child.once('exit',r)); }
+    await admin.query(`DROP SCHEMA "${schema}" CASCADE`);
+    await admin.end();
+    fs.rmSync(scratch,{recursive:true,force:true});
+  }
+});

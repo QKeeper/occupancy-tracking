@@ -978,11 +978,11 @@ function EndpointCard({
     setExecuting(true);
     const t0 = performance.now();
     try {
-      const hasBody = ["POST", "PUT", "PATCH"].includes(method) && bodyText.trim().length > 0;
+      const hasBody = ["POST", "PUT", "PATCH", "DELETE"].includes(method);
       const res = await fetch(resolvedUrl, {
         method,
         headers: hasBody ? { "Content-Type": "application/json" } : undefined,
-        body: hasBody ? bodyText : undefined,
+        body: hasBody ? bodyText.trim() || "{}" : undefined,
       });
       const rawText = await res.text();
       let formatted = rawText;

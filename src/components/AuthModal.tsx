@@ -114,6 +114,7 @@ export interface SavedAccount {
   display_name: string;
   avatar_color: string;
   avatar_url?: string | null;
+  requiresPassword?: boolean;
 }
 
 // ============================================================================
@@ -176,12 +177,14 @@ export const ProfileCabinetModal: React.FC<ProfileCabinetModalProps> = ({
   }>({ open: false, kind: "avatar", src: null });
 
   const avatarInputRef = useRef<HTMLInputElement>(null);
+  const [editRevision, setEditRevision] = useState(currentUser.revision);
   const bannerInputRef = useRef<HTMLInputElement>(null);
   const customIconInputRef = useRef<HTMLInputElement>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (open) {
+      setEditRevision(currentUser.revision);
       setDisplayName(currentUser.display_name);
       setUsername(currentUser.username);
       setAvatarColor(currentUser.avatar_color || "#3B82F6");
@@ -202,7 +205,7 @@ export const ProfileCabinetModal: React.FC<ProfileCabinetModalProps> = ({
       setPasswordErrors({});
       setErrors({});
     }
-  }, [open, currentUser]);
+  }, [open, currentUser.id]);
 
   const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -271,16 +274,23 @@ export const ProfileCabinetModal: React.FC<ProfileCabinetModalProps> = ({
     if (!file) return;
     try {
       const dataUrl = await readFileAsDataUrl(file, 2);
+      const response = await fetch("/api/upload", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dataUrl, kind: "icon" }),
+      });
+      const uploaded = await response.json();
+      if (!response.ok) throw new Error(uploaded.error || "Ошибка загрузки иконки");
+      const iconUrl: string = uploaded.url;
       setTimelineStyle((prev) => {
         const currentList = prev.iconHistory || TELEGRAM_PATTERN_SYMBOLS;
         const nextHistory = [
-          dataUrl,
-          ...currentList.filter((item) => item !== dataUrl),
+          iconUrl,
+          ...currentList.filter((item) => item !== iconUrl),
         ].slice(0, MAX_ICON_HISTORY);
         return {
           ...prev,
           patternType: "symbols",
-          symbol: dataUrl,
+          symbol: iconUrl,
           iconHistory: nextHistory,
         };
       });
@@ -323,6 +333,7 @@ export const ProfileCabinetModal: React.FC<ProfileCabinetModalProps> = ({
     setLoading(true);
     try {
       await onUpdateProfile({
+        revision: editRevision,
         ...parsed.data,
         avatar_url: avatarUrl,
         banner_url: bannerUrl,
@@ -574,6 +585,9 @@ export const ProfileCabinetModal: React.FC<ProfileCabinetModalProps> = ({
                                     Активен
                                   </span>
                                 )}
+                                {acc.requiresPassword && (
+                                  <span className="text-[10px] font-medium text-amber-600 dark:text-amber-400">Нужен пароль</span>
+                                )}
                               </div>
                               <div className="text-xs font-mono text-muted-foreground truncate">
                                 @{acc.username}
@@ -582,7 +596,7 @@ export const ProfileCabinetModal: React.FC<ProfileCabinetModalProps> = ({
                           </div>
 
                           <div className="flex items-center gap-1.5 shrink-0">
-                            {!isCurrent && (
+                            {(!isCurrent || acc.requiresPassword) && (
                               <Button
                                 type="button"
                                 variant="secondary"
@@ -592,7 +606,7 @@ export const ProfileCabinetModal: React.FC<ProfileCabinetModalProps> = ({
                                   onOpenChange(false);
                                 }}
                               >
-                                Переключиться
+                                {acc.requiresPassword ? "Войти" : "Переключиться"}
                               </Button>
                             )}
                             {!isCurrent && (
@@ -1114,13 +1128,15 @@ export const ProfileCabinetModal: React.FC<ProfileCabinetModalProps> = ({
 interface AuthModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSelectUser: (user: User) => void;
+  initialUsername?: string;
+  onSelectUser: (user: User) => Promise<void>;
   onUserRegistered: (user: User) => Promise<void>;
 }
 
 export const AuthModal: React.FC<AuthModalProps> = ({
   open,
   onOpenChange,
+  initialUsername = "",
   onSelectUser,
   onUserRegistered,
 }) => {
@@ -1139,13 +1155,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
   useEffect(() => {
     if (open) {
+      setLoginUsername(initialUsername);
       setLoginErrors({});
       setRegErrors({});
       setLoginPassword("");
       setRegPassword("");
       setRegConfirmPassword("");
     }
-  }, [open]);
+  }, [open, initialUsername]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1171,8 +1188,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Ошибка входа");
       toast.success(`Вы вошли как @${data.username}`);
-      onSelectUser(data);
       onOpenChange(false);
+      await onSelectUser(data);
     } catch (err: any) {
       toast.error(err.message);
     } finally {
@@ -1231,7 +1248,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           </DialogDescription>
         </DialogHeader>
 
-        <Tabs defaultValue="login" className="pt-1">
+        <Tabs key={`${open}:${initialUsername}`} defaultValue="login" className="pt-1">
           <TabsList className="grid w-full grid-cols-2">
             <TabsTrigger value="login">Вход</TabsTrigger>
             <TabsTrigger value="register">Регистрация</TabsTrigger>

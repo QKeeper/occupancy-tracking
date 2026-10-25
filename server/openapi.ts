@@ -1,5 +1,5 @@
 export function getOpenApiSpec(baseUrl = "http://localhost:5173") {
-  return {
+  const spec: any = {
     openapi: "3.1.0",
     info: {
       title: "Syncro Occupancy Tracking API (Agent & OpenAPI Interface)",
@@ -430,7 +430,6 @@ export function getOpenApiSpec(baseUrl = "http://localhost:5173") {
                     username: { type: "string", minLength: 2, maxLength: 32, example: "ivan_dev" },
                     display_name: { type: "string", minLength: 1, maxLength: 64, example: "Иван" },
                     password: { type: "string", minLength: 4, example: "secret123" },
-                    role_title: { type: "string", example: "Backend Developer" },
                     avatar_color: { type: "string", example: "#3B82F6" },
                   },
                 },
@@ -897,7 +896,6 @@ export function getOpenApiSpec(baseUrl = "http://localhost:5173") {
             id: { type: "integer", example: 1 },
             username: { type: "string", example: "alex" },
             display_name: { type: "string", example: "Алексей" },
-            role_title: { type: "string", example: "Участник" },
             avatar_color: { type: "string", example: "#3B82F6" },
             avatar_url: { type: ["string", "null"] },
             banner_url: { type: ["string", "null"] },
@@ -914,7 +912,6 @@ export function getOpenApiSpec(baseUrl = "http://localhost:5173") {
           properties: {
             username: { type: "string" },
             display_name: { type: "string" },
-            role_title: { type: "string" },
             avatar_color: { type: "string" },
             schedule_config: { $ref: "#/components/schemas/ScheduleConfig" },
             overrides: {
@@ -1007,7 +1004,6 @@ export function getOpenApiSpec(baseUrl = "http://localhost:5173") {
                   id: { type: "integer" },
                   username: { type: "string" },
                   display_name: { type: "string" },
-                  role_title: { type: "string" },
                   dailySchedule: {
                     type: "array",
                     items: { $ref: "#/components/schemas/ComputedDaySchedule" },
@@ -1050,6 +1046,36 @@ export function getOpenApiSpec(baseUrl = "http://localhost:5173") {
       },
     },
   };
+  spec.info.version = "2.0.0";
+  spec.info.description += "\n\nВход создаёт HttpOnly cookie-сессию. ID пользователя не заменяет авторизацию. Изменять можно только свой профиль; управление группой проверяется на сервере. HTTP 409 означает конфликт версий: перечитайте данные и согласуйте изменения.";
+  spec.security = [{ cookieSession: [] }];
+  spec.components.securitySchemes = { cookieSession: { type: "apiKey", in: "cookie", name: "syncro_session" } };
+  const revision = { type: "integer", minimum: 0, description: "revision из последнего прочитанного профиля" };
+  spec.components.schemas.User.properties.revision = revision;
+  spec.components.schemas.UpdateUserRequest.required = ["revision"];
+  spec.components.schemas.UpdateUserRequest.properties.revision = revision;
+  const day = spec.paths["/api/users/{id}/overrides/{date}"];
+  const expected = { anyOf: [{ $ref: "#/components/schemas/DayOverride" }, { type: "null" }], description: "Ранее прочитанное overrides[date], либо null если записи не было" };
+  day.put.requestBody.content["application/json"].schema = { type: "object", additionalProperties: false, required: ["expectedOverride", "override"], properties: { expectedOverride: expected, override: { $ref: "#/components/schemas/DayOverride" } } };
+  for (const example of Object.values(day.put.requestBody.content["application/json"].examples) as any[]) example.value = { expectedOverride: null, override: example.value };
+  day.delete.requestBody = { required: true, content: { "application/json": { schema: { type: "object", additionalProperties: false, required: ["expectedOverride"], properties: { expectedOverride: expected } }, example: { expectedOverride: null } } } };
+  const schedule = spec.paths["/api/users/{id}/schedule"].patch;
+  schedule.requestBody.content["application/json"].schema = { type: "object", required: ["revision"], properties: { ...spec.components.schemas.ScheduleConfig.properties, revision } };
+  for (const example of Object.values(schedule.requestBody.content["application/json"].examples) as any[]) example.value.revision = 0;
+  for (const route of Object.values(spec.paths) as any[]) for (const [method, op] of Object.entries(route) as any[]) {
+    if (!op.responses) continue;
+    op.responses["401"] = { description: "Требуется действующая сессия" };
+    op.responses["403"] = { description: "Недостаточно прав" };
+    if (["post","put","patch","delete"].includes(method)) {
+      op.responses["400"] = { description: "Некорректные данные" };
+      op.responses["409"] = { description: "Данные изменились; перечитайте профиль или день" };
+    }
+  }
+  for (const path of ["/api/auth/login", "/api/auth/register", "/api/openapi.json", "/api/llms.txt"]) if (spec.paths[path]) for (const op of Object.values(spec.paths[path]) as any[]) op.security = [];
+  spec.paths["/api/auth/me"] = { get: { operationId: "getSessionUser", summary: "Текущий пользователь по серверной сессии", responses: { "200": { description: "Профиль с revision", content: { "application/json": { schema: { $ref: "#/components/schemas/User" } } } }, "401": { description: "Сессия отсутствует или истекла" } } } };
+  spec.paths["/api/auth/logout"] = { post: { operationId: "logout", summary: "Отозвать текущую сессию", requestBody: { content: { "application/json": { schema: { type: "object" }, example: {} } } }, responses: { "200": { description: "Сессия отозвана" } } } };
+  spec.paths["/api/auth/switch"] = { post: { operationId: "switchAccount", security: [], summary: "Переключиться на ранее подтверждённый аккаунт по его cookie", requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["userId"], properties: { userId: { type: "integer" } } } } } }, responses: { "200": { description: "Аккаунт переключён" }, "401": { description: "Для аккаунта нужно снова ввести пароль" } } } };
+  return spec;
 }
 
 export function getLlmsTxtContent(baseUrl = "http://localhost:5173"): string {
@@ -1058,6 +1084,16 @@ export function getLlmsTxtContent(baseUrl = "http://localhost:5173"): string {
 > Syncro — веб-сервис отслеживания занятости участников групп и поиска общих свободных окон.
 > Полная спецификация OpenAPI 3.1.0 доступна по адресу: \`${baseUrl}/api/openapi.json\`
 > Упрощённый веб-интерфейс и интерактивная консоль OpenAPI доступны на странице: \`${baseUrl}/?agent=1\` (или кнопка «OpenAPI / Агентам» в сайдбаре).
+
+## Авторизация и конфликты
+
+Сначала выполните POST /api/auth/login с JSON username/password и сохраняйте полученные cookie.
+GET /api/auth/me возвращает подтверждённого пользователя и revision. Значение ID в localStorage не даёт права доступа.
+Все изменения требуют Content-Type: application/json. Изменять можно свой аккаунт, права в группах проверяет сервер.
+Для PUT профиля и PATCH расписания передавайте revision из прочитанного профиля.
+Для изменения/удаления дня передавайте expectedOverride из overrides[date]; null означает, что записи не было.
+При HTTP 409 перечитайте данные и согласуйте изменения. Не повторяйте автоматически устаревшую запись.
+В примерах ниже revision=0 и expectedOverride=null нужно заменить фактически прочитанными значениями.
 
 ## 1. Ключевые понятия и модель данных
 
@@ -1093,22 +1129,23 @@ PUT /api/users/{userId}/overrides/{YYYY-MM-DD}
 Content-Type: application/json
 
 {
-  "status": "working",
-  "slots": [{ "start": "12:00", "end": "20:00" }],
-  "note": "Смена с обеда"
+  "expectedOverride": null,
+  "override": { "status": "working", "slots": [{ "start": "12:00", "end": "20:00" }], "note": "Смена с обеда" }
 }
 \`\`\`
 Чтобы сделать день полностью свободным (отгул/выходной):
 \`\`\`json
 {
-  "status": "free",
-  "slots": [],
-  "note": "Выходной"
+  "expectedOverride": null,
+  "override": { "status": "free", "slots": [], "note": "Выходной" }
 }
 \`\`\`
 Чтобы удалить правку и вернуть день к базовому графику:
 \`\`\`http
 DELETE /api/users/{userId}/overrides/{YYYY-MM-DD}
+Content-Type: application/json
+
+{ "expectedOverride": null }
 \`\`\`
 
 ### В. Изменить базовый график работы пользователя
@@ -1117,6 +1154,7 @@ PATCH /api/users/{userId}/schedule
 Content-Type: application/json
 
 {
+  "revision": 0,
   "mode": "shift_cycle",
   "shift": {
     "workDays": 2,

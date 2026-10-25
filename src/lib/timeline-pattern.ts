@@ -55,7 +55,7 @@ export const TintedPatternIcon: React.FC<{
 }> = ({ symbol, color, size = 16 }) => {
   const rawId = useId();
   const filterId = `tint-${rawId.replace(/[^a-zA-Z0-9_-]/g, "")}`;
-  const isCustomImage = symbol.startsWith("data:image/");
+  const isCustomImage = symbol.startsWith("data:image/") || symbol.startsWith("/uploads/icon_");
 
   return React.createElement(
     "svg",
@@ -138,6 +138,15 @@ export function getTimelineBlockStyle(config?: Partial<TimelineStyleConfig>): Re
   }
 
   if (patternType === "symbols") {
+    if (symbol.startsWith("/uploads/icon_")) {
+      const params = new URLSearchParams({ icon: symbol, color: patternColor, scale: String(iconScale) });
+      return {
+        backgroundColor: baseBg, borderColor: borderCol,
+        backgroundImage: `url("/api/pattern-tile?${params}")`,
+        backgroundRepeat: "repeat", backgroundSize: "52px 44px",
+      };
+    }
+
     const isCustomImage = symbol.startsWith("data:image/");
     const size1 = Math.round(13 * iconScale * 10) / 10;
     const size2 = Math.round(11 * iconScale * 10) / 10;

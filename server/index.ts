@@ -1,5 +1,9 @@
 import express from "express";
-import cors from "cors";
+import { createPatternMedia } from "./pattern-media";
+import { initAuth, installAuth, issueSession, hashPassword, verifyPassword } from "./auth";
+import { installUserRoutes } from "./user-routes";
+import { installGroupRoutes, HttpError } from "./group-routes";
+import { usernameSchema, passwordSchema } from "./validation";
 import dotenv from "dotenv";
 import pg from "pg";
 import { z } from "zod";
@@ -19,16 +23,15 @@ dotenv.config();
 
 const { Pool } = pg;
 
-const pool = new Pool({
-  connectionString:
-    process.env.DATABASE_URL ||
-    "postgresql://postgres:Nsconsol-22910%40@127.0.0.1:5432/occupancy_tracking",
-});
+if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required");
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 const uploadsDir = path.resolve(process.cwd(), "uploads");
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
+
+const patternMedia = createPatternMedia(uploadsDir);
 
 function saveDataUrlAsImageFile(
   value: string | null | undefined,
@@ -66,8 +69,9 @@ function saveDataUrlAsImageFile(
 }
 
 const app = express();
-app.use(cors());
+app.disable("x-powered-by");
 app.use(express.json({ limit: "25mb" }));
+installAuth(app, pool);
 app.use(
   "/uploads",
   express.static(uploadsDir, {
@@ -106,16 +110,14 @@ async function initDb() {
         id SERIAL PRIMARY KEY,
         username VARCHAR(64) UNIQUE NOT NULL,
         display_name VARCHAR(128) NOT NULL,
-        password VARCHAR(128) NOT NULL DEFAULT 'admin',
-        role_title VARCHAR(128) DEFAULT 'Участник',
+        password TEXT NOT NULL,
         avatar_color VARCHAR(32) DEFAULT '#3B82F6',
         schedule_config JSONB NOT NULL DEFAULT '{}'::jsonb,
         overrides JSONB NOT NULL DEFAULT '{}'::jsonb,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
 
-      ALTER TABLE users ALTER COLUMN password SET DEFAULT 'admin';
-      UPDATE users SET password = 'admin' WHERE password = '123456' OR password IS NULL OR password = '';
+      ALTER TABLE users DROP COLUMN IF EXISTS role_title;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT DEFAULT NULL;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS banner_url TEXT DEFAULT NULL;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS timeline_style JSONB NOT NULL DEFAULT '{"bgColor":"#e11d48","patternColor":"#fda4af","patternType":"stripes","symbol":"⚡"}'::jsonb;
@@ -142,6 +144,9 @@ async function initDb() {
       CREATE INDEX IF NOT EXISTS idx_group_members_group_id ON group_members(group_id);
       CREATE INDEX IF NOT EXISTS idx_users_lower_username ON users(LOWER(username));
     `);
+
+    await initAuth(client);
+    await patternMedia.migrate(client);
 
     // Automatically migrate any legacy base64 avatar_url / banner_url stored in DB into static /uploads files
     const { rows: base64Users } = await client.query(
@@ -177,6 +182,10 @@ function broadcastUpdate(eventType: string, payload?: any) {
   }
 }
 
+installUserRoutes(app, pool, broadcastUpdate, saveDataUrlAsImageFile, patternMedia.normalizeStyle);
+patternMedia.install(app);
+installGroupRoutes(app, pool, broadcastUpdate);
+
 app.get("/api/events", (req, res) => {
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
@@ -210,13 +219,14 @@ app.get("/api/users-mini", async (req, res) => {
 });
 
 // Upload base64 dataUrl (with optional normalized crop { x, y, width, height }) and return static /uploads/... file URL
-app.post("/api/upload", async (req, res) => {
+app.post("/api/upload", async (req, res, next) => {
   try {
     const { dataUrl, kind, crop } = req.body;
     if (!dataUrl || typeof dataUrl !== "string") {
       return res.status(400).json({ error: "Не передан файл" });
     }
     const safeKind = kind === "banner" || kind === "icon" ? kind : "avatar";
+    if (safeKind === "icon") return res.json({ url: await patternMedia.saveIcon(dataUrl) });
 
     if (
       crop &&
@@ -299,7 +309,7 @@ app.post("/api/upload", async (req, res) => {
     const url = saveDataUrlAsImageFile(dataUrl, safeKind);
     res.json({ url });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
@@ -308,7 +318,7 @@ app.get("/api/users/:id", async (req, res) => {
   try {
     const userId = parseInt(req.params.id, 10);
     const { rows } = await pool.query(
-      "SELECT id, username, display_name, role_title, avatar_color, avatar_url, banner_url, timeline_style, member_orders, schedule_config, overrides, created_at FROM users WHERE id = $1",
+      "SELECT id, username, display_name, avatar_color, avatar_url, banner_url, timeline_style, member_orders, schedule_config, overrides, revision, created_at FROM users WHERE id = $1",
       [userId]
     );
     if (rows.length === 0) return res.status(404).json({ error: "Не найден" });
@@ -320,24 +330,19 @@ app.get("/api/users/:id", async (req, res) => {
 
 const serverLoginSchema = z.object({
   username: z.string().trim().min(1, "Введите @username"),
-  password: z.string().min(1, "Введите пароль"),
+  password: z.string().min(1, "Введите пароль").max(1024),
 });
 
 const serverRegisterSchema = z.object({
-  username: z
-    .string()
-    .trim()
-    .min(2, "Юзернейм должен содержать минимум 2 символа")
-    .max(32, "Юзернейм слишком длинный"),
+  username: usernameSchema,
   display_name: z.string().trim().min(1, "Введите имя").max(64, "Имя слишком длинное"),
-  password: z.string().min(4, "Пароль должен содержать минимум 4 символа"),
-  role_title: z.string().optional(),
+  password: passwordSchema,
   avatar_color: z.string().optional(),
 });
 
 const serverChangePasswordSchema = z.object({
-  currentPassword: z.string().min(1, "Укажите текущий пароль"),
-  newPassword: z.string().min(4, "Новый пароль должен содержать минимум 4 символа"),
+  currentPassword: z.string().min(1, "Укажите текущий пароль").max(1024),
+  newPassword: passwordSchema,
 });
 
 // Login user by @username and password
@@ -350,20 +355,21 @@ app.post("/api/auth/login", async (req, res) => {
     const { username, password } = parsed.data;
     const cleanUsername = username.toLowerCase().replace(/^@/, "");
     const { rows } = await pool.query(
-      "SELECT id, username, display_name, password, role_title, avatar_color, avatar_url, banner_url, timeline_style, member_orders, schedule_config, overrides FROM users WHERE LOWER(username) = $1",
+      "SELECT id, username, display_name, password, avatar_color, avatar_url, banner_url, timeline_style, member_orders, schedule_config, overrides, revision FROM users WHERE LOWER(username) = $1",
       [cleanUsername]
     );
     if (rows.length === 0) {
       return res.status(404).json({ error: "Пользователь с таким @username не найден" });
     }
     const userRow = rows[0];
-    if (userRow.password !== password) {
+    if (!(await verifyPassword(password, userRow.password))) {
       return res.status(401).json({ error: "Неверный пароль" });
     }
     const { password: _removed, ...safeUser } = userRow;
+    await issueSession(pool, req, res, userRow.id, userRow.password);
     res.json(safeUser);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(err.status || 500).json({ error: err.status ? err.message : "Ошибка входа" });
   }
 });
 
@@ -374,7 +380,7 @@ app.post("/api/auth/register", async (req, res) => {
     if (!parsed.success) {
       return res.status(400).json({ error: parsed.error.issues[0]?.message || "Ошибка валидации" });
     }
-    const { username, display_name, password, role_title, avatar_color } = parsed.data;
+    const { username, display_name, password, avatar_color } = parsed.data;
     const cleanUsername = username.toLowerCase().replace(/^@/, "");
     const defaultSchedule: ScheduleConfig = {
       mode: "fixed_weekly",
@@ -396,18 +402,18 @@ app.post("/api/auth/register", async (req, res) => {
     };
 
     const { rows } = await pool.query(
-      `INSERT INTO users (username, display_name, password, role_title, avatar_color, schedule_config, overrides)
-       VALUES ($1, $2, $3, $4, $5, $6, '{}'::jsonb)
-       RETURNING id, username, display_name, role_title, avatar_color, avatar_url, banner_url, timeline_style, member_orders, schedule_config, overrides`,
+      `INSERT INTO users (username, display_name, password, avatar_color, schedule_config, overrides)
+       VALUES ($1, $2, $3, $4, $5, '{}'::jsonb)
+       RETURNING id, username, display_name, avatar_color, avatar_url, banner_url, timeline_style, member_orders, schedule_config, overrides, revision`,
       [
         cleanUsername,
         display_name.trim(),
-        password,
-        role_title || "Участник",
+        await hashPassword(password),
         avatar_color || "#3B82F6",
         JSON.stringify(defaultSchedule),
       ]
     );
+    await issueSession(pool, req, res, rows[0].id);
     res.json(rows[0]);
     broadcastUpdate("user_registered", { id: rows[0].id });
   } catch (err: any) {
@@ -432,109 +438,23 @@ app.post("/api/users/:id/change-password", async (req, res) => {
     if (rows.length === 0) {
       return res.status(404).json({ error: "Пользователь не найден" });
     }
-    if (rows[0].password !== currentPassword) {
+    if (!(await verifyPassword(currentPassword, rows[0].password))) {
       return res.status(400).json({ error: "Неверный текущий пароль" });
     }
 
-    await pool.query("UPDATE users SET password = $1 WHERE id = $2", [newPassword, userId]);
+    const nextHash = await hashPassword(newPassword);
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const changed = await client.query("UPDATE users SET password=$1 WHERE id=$2 AND password=$3 RETURNING id", [nextHash, userId, rows[0].password]);
+      if (!changed.rows.length) { await client.query("ROLLBACK"); return res.status(409).json({ error: "Пароль уже изменился" }); }
+      await client.query("DELETE FROM auth_sessions WHERE user_id=$1", [userId]);
+      await client.query("COMMIT");
+    } catch (e) { await client.query("ROLLBACK"); throw e; }
+    finally { client.release(); }
+    await issueSession(pool, req, res, userId, nextHash);
     res.json({ ok: true });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Save personal member sort order for a group
-app.put("/api/users/:id/member-order", async (req, res) => {
-  try {
-    const userId = parseInt(req.params.id, 10);
-    const { groupKey, memberIds } = req.body;
-    if (!groupKey || !Array.isArray(memberIds)) {
-      return res.status(400).json({ error: "Некорректные данные сортировки" });
-    }
-    const cleanIds = memberIds.map((id) => Number(id)).filter((id) => !Number.isNaN(id));
-    const currentRes = await pool.query("SELECT member_orders FROM users WHERE id = $1", [userId]);
-    if (currentRes.rows.length === 0) {
-      return res.status(404).json({ error: "Пользователь не найден" });
-    }
-    const nextOrders = {
-      ...(currentRes.rows[0].member_orders || {}),
-      [String(groupKey)]: cleanIds,
-    };
-    await pool.query("UPDATE users SET member_orders = $1 WHERE id = $2", [
-      JSON.stringify(nextOrders),
-      userId,
-    ]);
-    res.json({ ok: true, member_orders: nextOrders });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Update user profile, username, avatar_url, banner_url, timeline_style, schedule_config & overrides
-app.put("/api/users/:id", async (req, res) => {
-  try {
-    const userId = parseInt(req.params.id, 10);
-    const {
-      username,
-      display_name,
-      role_title,
-      avatar_color,
-      avatar_url,
-      banner_url,
-      timeline_style,
-      member_orders,
-      schedule_config,
-      overrides,
-    } = req.body;
-
-    const currentRes = await pool.query("SELECT * FROM users WHERE id = $1", [userId]);
-    if (currentRes.rows.length === 0) {
-      return res.status(404).json({ error: "Пользователь не найден" });
-    }
-    const cur = currentRes.rows[0];
-    const nextUsername = username
-      ? String(username).trim().toLowerCase().replace(/^@/, "")
-      : cur.username;
-    const rawAvatarUrl = avatar_url !== undefined ? avatar_url : cur.avatar_url;
-    const rawBannerUrl = banner_url !== undefined ? banner_url : cur.banner_url;
-    const nextAvatarUrl = saveDataUrlAsImageFile(rawAvatarUrl, "avatar");
-    const nextBannerUrl = saveDataUrlAsImageFile(rawBannerUrl, "banner");
-
-    const updated = await pool.query(
-      `UPDATE users
-       SET username = $1,
-           display_name = $2,
-           role_title = $3,
-           avatar_color = $4,
-           avatar_url = $5,
-           banner_url = $6,
-           timeline_style = $7,
-           member_orders = $8,
-           schedule_config = $9,
-           overrides = $10
-       WHERE id = $11
-       RETURNING id, username, display_name, role_title, avatar_color, avatar_url, banner_url, timeline_style, member_orders, schedule_config, overrides`,
-      [
-        nextUsername,
-        display_name ?? cur.display_name,
-        role_title ?? cur.role_title,
-        avatar_color ?? cur.avatar_color,
-        nextAvatarUrl,
-        nextBannerUrl,
-        JSON.stringify(timeline_style ?? cur.timeline_style ?? {}),
-        JSON.stringify(member_orders ?? cur.member_orders ?? {}),
-        JSON.stringify(schedule_config ?? cur.schedule_config),
-        JSON.stringify(overrides ?? cur.overrides),
-        userId,
-      ]
-    );
-
-    res.json(updated.rows[0]);
-    broadcastUpdate("schedule_updated", { userId });
-  } catch (err: any) {
-    if (err.code === "23505") {
-      return res.status(400).json({ error: "Этот @username уже занят" });
-    }
     res.status(500).json({ error: err.message });
   }
 });
@@ -542,7 +462,8 @@ app.put("/api/users/:id", async (req, res) => {
 // Get groups for a user
 app.get("/api/groups", async (req, res) => {
   try {
-    const userId = req.query.userId ? parseInt(String(req.query.userId), 10) : null;
+    const userId = res.locals.userId;
+    if (req.query.userId && Number(req.query.userId) !== userId) return res.status(403).json({ error: "Нельзя читать чужой список групп" });
 
     const { rows: groups } = userId
       ? await pool.query(
@@ -570,9 +491,9 @@ app.get("/api/groups", async (req, res) => {
     const groupIds = groups.map((g) => g.id);
     const { rows: members } = await pool.query(
       `SELECT gm.group_id, gm.user_id, gm.status, gm.invited_by, gm.joined_at,
-              u.username, u.display_name, u.role_title, u.avatar_color, u.avatar_url, u.banner_url,
+              u.username, u.display_name, u.avatar_color, u.avatar_url, u.banner_url,
               (u.timeline_style - 'iconHistory') AS timeline_style,
-              u.schedule_config, u.overrides,
+              u.schedule_config, u.overrides, u.revision,
               inv.display_name as invited_by_name, inv.username as invited_by_username
        FROM group_members gm
        JOIN users u ON gm.user_id = u.id
@@ -595,221 +516,6 @@ app.get("/api/groups", async (req, res) => {
     });
 
     res.json(result);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Create a new group
-app.post("/api/groups", async (req, res) => {
-  const client = await pool.connect();
-  try {
-    const { name, description, owner_id, invite_usernames } = req.body;
-    if (!name || !owner_id) {
-      return res.status(400).json({ error: "Укажите название группы" });
-    }
-    await client.query("BEGIN");
-    const grpRes = await client.query(
-      `INSERT INTO groups (name, description, owner_id) VALUES ($1, $2, $3) RETURNING *`,
-      [name.trim(), (description || "").trim(), owner_id]
-    );
-    const group = grpRes.rows[0];
-
-    await client.query(
-      `INSERT INTO group_members (group_id, user_id, status, invited_by) VALUES ($1, $2, 'accepted', $2)`,
-      [group.id, owner_id]
-    );
-
-    if (Array.isArray(invite_usernames) && invite_usernames.length > 0) {
-      for (const rawUname of invite_usernames) {
-        const clean = String(rawUname).trim().toLowerCase().replace(/^@/, "");
-        if (!clean) continue;
-        const uRes = await client.query("SELECT id FROM users WHERE LOWER(username) = $1", [clean]);
-        if (uRes.rows.length > 0 && uRes.rows[0].id !== owner_id) {
-          await client.query(
-            `INSERT INTO group_members (group_id, user_id, status, invited_by)
-             VALUES ($1, $2, 'pending', $3)
-             ON CONFLICT (group_id, user_id) DO NOTHING`,
-            [group.id, uRes.rows[0].id, owner_id]
-          );
-        }
-      }
-    }
-
-    await client.query("COMMIT");
-    res.json(group);
-    broadcastUpdate("group_created", { groupId: group.id });
-  } catch (err: any) {
-    await client.query("ROLLBACK");
-    res.status(500).json({ error: err.message });
-  } finally {
-    client.release();
-  }
-});
-
-// Invite user to group by username (always pending confirmation)
-app.post("/api/groups/:groupId/invite", async (req, res) => {
-  try {
-    const groupId = parseInt(req.params.groupId, 10);
-    const { username, invited_by } = req.body;
-    if (!username) {
-      return res.status(400).json({ error: "Введите @username пользователя" });
-    }
-    const clean = String(username).trim().toLowerCase().replace(/^@/, "");
-    const uRes = await pool.query(
-      "SELECT id, username, display_name, role_title, avatar_color FROM users WHERE LOWER(username) = $1",
-      [clean]
-    );
-    if (uRes.rows.length === 0) {
-      return res.status(404).json({ error: `Пользователь @${clean} не найден` });
-    }
-    const targetUser = uRes.rows[0];
-
-    const existing = await pool.query(
-      "SELECT status FROM group_members WHERE group_id = $1 AND user_id = $2",
-      [groupId, targetUser.id]
-    );
-    if (existing.rows.length > 0) {
-      return res.status(400).json({
-        error:
-          existing.rows[0].status === "accepted"
-            ? `@${clean} уже состоит в этой группе`
-            : `Приглашение для @${clean} уже отправлено`,
-      });
-    }
-
-    await pool.query(
-      `INSERT INTO group_members (group_id, user_id, status, invited_by) VALUES ($1, $2, 'pending', $3)`,
-      [groupId, targetUser.id, invited_by || null]
-    );
-
-    res.json({ message: `Приглашение отправлено @${clean}`, user: targetUser, status: "pending" });
-    broadcastUpdate("group_invited", { groupId, targetUserId: targetUser.id });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Respond to group invitation (accept / decline)
-app.post("/api/groups/:groupId/respond", async (req, res) => {
-  try {
-    const groupId = parseInt(req.params.groupId, 10);
-    const { user_id, action } = req.body;
-    if (action === "accept") {
-      await pool.query(
-        "UPDATE group_members SET status = 'accepted' WHERE group_id = $1 AND user_id = $2",
-        [groupId, user_id]
-      );
-      res.json({ status: "accepted" });
-      broadcastUpdate("group_responded", { groupId, userId: user_id, status: "accepted" });
-    } else {
-      await pool.query("DELETE FROM group_members WHERE group_id = $1 AND user_id = $2", [
-        groupId,
-        user_id,
-      ]);
-      res.json({ status: "declined" });
-      broadcastUpdate("group_responded", { groupId, userId: user_id, status: "declined" });
-    }
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Update group name and description
-app.put("/api/groups/:groupId", async (req, res) => {
-  try {
-    const groupId = parseInt(req.params.groupId, 10);
-    const { name, description } = req.body;
-    if (!name || !String(name).trim()) {
-      return res.status(400).json({ error: "Название группы не может быть пустым" });
-    }
-    const { rows } = await pool.query(
-      `UPDATE groups
-       SET name = $1,
-           description = COALESCE($2, description)
-       WHERE id = $3
-       RETURNING *`,
-      [String(name).trim(), description !== undefined ? String(description).trim() : null, groupId]
-    );
-    if (rows.length === 0) {
-      return res.status(404).json({ error: "Группа не найдена" });
-    }
-    res.json(rows[0]);
-    broadcastUpdate("group_updated", { groupId });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Remove member from group (kick member, cancel pending invite, or leave group)
-app.delete("/api/groups/:groupId/members/:targetUserId", async (req, res) => {
-  try {
-    const groupId = parseInt(req.params.groupId, 10);
-    const targetUserId = parseInt(req.params.targetUserId, 10);
-
-    const grpRes = await pool.query("SELECT * FROM groups WHERE id = $1", [groupId]);
-    if (grpRes.rows.length === 0) {
-      return res.status(404).json({ error: "Группа не найдена" });
-    }
-    const group = grpRes.rows[0];
-
-    await pool.query("DELETE FROM group_members WHERE group_id = $1 AND user_id = $2", [
-      groupId,
-      targetUserId,
-    ]);
-
-    // If the owner left the group, transfer ownership to the earliest remaining accepted member, or delete if empty
-    if (group.owner_id === targetUserId) {
-      const remaining = await pool.query(
-        "SELECT user_id FROM group_members WHERE group_id = $1 AND status = 'accepted' ORDER BY joined_at ASC LIMIT 1",
-        [groupId]
-      );
-      if (remaining.rows.length > 0) {
-        await pool.query("UPDATE groups SET owner_id = $1 WHERE id = $2", [
-          remaining.rows[0].user_id,
-          groupId,
-        ]);
-      } else {
-        await pool.query("DELETE FROM groups WHERE id = $1", [groupId]);
-      }
-    }
-
-    res.json({ ok: true });
-    broadcastUpdate("group_member_removed", { groupId, targetUserId });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Transfer group ownership to another member
-app.post("/api/groups/:groupId/transfer-owner", async (req, res) => {
-  try {
-    const groupId = parseInt(req.params.groupId, 10);
-    const { new_owner_id } = req.body;
-    if (!new_owner_id) {
-      return res.status(400).json({ error: "Не указан новый владелец" });
-    }
-    const { rows } = await pool.query(
-      "UPDATE groups SET owner_id = $1 WHERE id = $2 RETURNING *",
-      [new_owner_id, groupId]
-    );
-    if (rows.length === 0) {
-      return res.status(404).json({ error: "Группа не найдена" });
-    }
-    res.json(rows[0]);
-    broadcastUpdate("group_updated", { groupId });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Delete group completely
-app.delete("/api/groups/:groupId", async (req, res) => {
-  try {
-    const groupId = parseInt(req.params.groupId, 10);
-    await pool.query("DELETE FROM groups WHERE id = $1", [groupId]);
-    res.json({ ok: true });
-    broadcastUpdate("group_deleted", { groupId });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -840,132 +546,15 @@ app.get("/api/users", async (req, res) => {
     const rawUname = req.query.username ? String(req.query.username).trim().toLowerCase().replace(/^@/, "") : "";
     if (rawUname) {
       const { rows } = await pool.query(
-        "SELECT id, username, display_name, role_title, avatar_color, avatar_url, schedule_config, overrides, created_at FROM users WHERE LOWER(username) LIKE $1 ORDER BY id ASC",
+        "SELECT id, username, display_name, avatar_color, avatar_url, schedule_config, overrides, revision, created_at FROM users WHERE LOWER(username) LIKE $1 ORDER BY id ASC",
         [`%${rawUname}%`]
       );
       return res.json(rows);
     }
     const { rows } = await pool.query(
-      "SELECT id, username, display_name, role_title, avatar_color, avatar_url, schedule_config, overrides, created_at FROM users ORDER BY id ASC"
+      "SELECT id, username, display_name, avatar_color, avatar_url, schedule_config, overrides, revision, created_at FROM users ORDER BY id ASC"
     );
     res.json(rows);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Set or update a single day override for a user (YYYY-MM-DD)
-app.put("/api/users/:id/overrides/:date", async (req, res) => {
-  try {
-    const userId = parseInt(req.params.id, 10);
-    const dateStr = String(req.params.date).trim();
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
-      return res.status(400).json({ error: "Дата должна быть в формате YYYY-MM-DD" });
-    }
-
-    const { status, slots, note } = req.body || {};
-    const validStatus: "working" | "free" | "partial" =
-      status === "free" || status === "partial" ? status : "working";
-    const normalizedSlots: TimeSlot[] =
-      validStatus === "free" || !Array.isArray(slots)
-        ? []
-        : slots
-            .filter((s: any) => s && typeof s.start === "string" && typeof s.end === "string")
-            .map((s: any) => ({
-              start: s.start,
-              end: s.end,
-              ...(s.label ? { label: String(s.label) } : {}),
-            }));
-
-    const overrideObj = {
-      status: validStatus,
-      slots: normalizedSlots,
-      ...(note ? { note: String(note) } : {}),
-    };
-
-    const currentRes = await pool.query("SELECT overrides FROM users WHERE id = $1", [userId]);
-    if (currentRes.rows.length === 0) {
-      return res.status(404).json({ error: "Пользователь не найден" });
-    }
-
-    const nextOverrides = { ...(currentRes.rows[0].overrides || {}), [dateStr]: overrideObj };
-    const updated = await pool.query(
-      `UPDATE users
-       SET overrides = $1
-       WHERE id = $2
-       RETURNING id, username, display_name, role_title, avatar_color, avatar_url, banner_url, timeline_style, schedule_config, overrides`,
-      [JSON.stringify(nextOverrides), userId]
-    );
-
-    broadcastUpdate("schedule_updated", { userId, dateStr });
-    res.json({
-      ok: true,
-      date: dateStr,
-      override: overrideObj,
-      user: updated.rows[0],
-    });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Delete a single day override for a user (revert YYYY-MM-DD to base schedule)
-app.delete("/api/users/:id/overrides/:date", async (req, res) => {
-  try {
-    const userId = parseInt(req.params.id, 10);
-    const dateStr = String(req.params.date).trim();
-
-    const currentRes = await pool.query("SELECT overrides FROM users WHERE id = $1", [userId]);
-    if (currentRes.rows.length === 0) {
-      return res.status(404).json({ error: "Пользователь не найден" });
-    }
-
-    const nextOverrides = { ...(currentRes.rows[0].overrides || {}) };
-    delete nextOverrides[dateStr];
-
-    const updated = await pool.query(
-      `UPDATE users
-       SET overrides = $1
-       WHERE id = $2
-       RETURNING id, username, display_name, role_title, avatar_color, avatar_url, banner_url, timeline_style, schedule_config, overrides`,
-      [JSON.stringify(nextOverrides), userId]
-    );
-
-    broadcastUpdate("schedule_updated", { userId, dateStr });
-    res.json({
-      ok: true,
-      date: dateStr,
-      user: updated.rows[0],
-    });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Patch only schedule_config for a user
-app.patch("/api/users/:id/schedule", async (req, res) => {
-  try {
-    const userId = parseInt(req.params.id, 10);
-    const currentRes = await pool.query("SELECT schedule_config FROM users WHERE id = $1", [userId]);
-    if (currentRes.rows.length === 0) {
-      return res.status(404).json({ error: "Пользователь не найден" });
-    }
-
-    const mergedConfig = {
-      ...(currentRes.rows[0].schedule_config || {}),
-      ...(req.body || {}),
-    };
-
-    const updated = await pool.query(
-      `UPDATE users
-       SET schedule_config = $1
-       WHERE id = $2
-       RETURNING id, username, display_name, role_title, avatar_color, avatar_url, banner_url, timeline_style, schedule_config, overrides`,
-      [JSON.stringify(mergedConfig), userId]
-    );
-
-    broadcastUpdate("schedule_updated", { userId });
-    res.json(updated.rows[0]);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -980,9 +569,11 @@ app.get("/api/groups/:groupId/availability", async (req, res) => {
       return res.status(404).json({ error: "Группа не найдена" });
     }
     const group = grpRes.rows[0];
+    const membership = await pool.query("SELECT 1 FROM group_members WHERE group_id=$1 AND user_id=$2 AND status='accepted'", [groupId, res.locals.userId]);
+    if (!membership.rows.length) return res.status(403).json({ error: "Нет доступа к группе" });
 
     const { rows: memberRows } = await pool.query(
-      `SELECT u.id, u.username, u.display_name, u.role_title, u.avatar_color, u.avatar_url,
+      `SELECT u.id, u.username, u.display_name, u.avatar_color, u.avatar_url,
               u.schedule_config, u.overrides
        FROM group_members gm
        JOIN users u ON gm.user_id = u.id
@@ -1023,7 +614,6 @@ app.get("/api/groups/:groupId/availability", async (req, res) => {
       id: m.id,
       username: m.username,
       display_name: m.display_name,
-      role_title: m.role_title,
       schedule_mode: m.schedule_config?.mode || "fixed_weekly",
       dailySchedule: days.map((d) => getUserDaySchedule(m as any, d)),
     }));
@@ -1062,6 +652,14 @@ app.get("/api/groups/:groupId/availability", async (req, res) => {
   }
 });
 
+app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  if (err instanceof z.ZodError) return res.status(400).json({ error: err.issues[0]?.message || "Некорректные данные", issues: err.issues });
+  if (err instanceof HttpError) return res.status(err.status).json({ error: err.message });
+  if (err.code === "23505") return res.status(409).json({ error: "Такое значение уже существует" });
+  if (err.type === "entity.parse.failed") return res.status(400).json({ error: "Некорректный JSON" });
+  console.error("Request failed", err.code || err.name);
+  res.status(500).json({ error: "Ошибка сервера" });
+});
 const PORT = process.env.PORT || 3001;
 
 initDb()
