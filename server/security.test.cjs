@@ -31,6 +31,12 @@ test('sessions, password migration, permissions, validation and concurrent saves
     )`);
     const secret = crypto.randomBytes(16).toString('hex');
     await admin.query(`INSERT INTO "${schema}".users(username,display_name,password,schedule_config) VALUES('legacy_user','Legacy',$1,'{"mode":"manual"}')`, [secret]);
+    const legacyOverrides = {
+      '2026-09-01': {status:'free',slots:[],note:'Выходной'},
+      '2026-09-02': {status:'working',slots:[{start:'06:00',end:'14:00',label:'Первая смена'},{start:'10:00',end:'16:00'}],note:'Пересечения'},
+      '2026-09-03': {status:'partial',slots:[{start:'22:00',end:'06:00'},{start:'20:00',end:'24:00',label:''}]},
+    };
+    await admin.query(`UPDATE "${schema}".users SET overrides=$1 WHERE username='legacy_user'`,[JSON.stringify(legacyOverrides)]);
     const iconData='data:image/svg+xml;base64,'+Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M2 2h20v20H2z" fill="black"/></svg>').toString('base64');
     const legacyStyle={bgColor:'#e11d48',patternColor:'#fda4af',patternType:'symbols',symbol:iconData,iconHistory:[iconData,'⚡']};
     await admin.query(`ALTER TABLE "${schema}".users ADD COLUMN timeline_style JSONB NOT NULL DEFAULT '{"bgColor":"#e11d48","patternColor":"#fda4af","patternType":"stripes","symbol":"⚡"}'`);
@@ -44,7 +50,7 @@ test('sessions, password migration, permissions, validation and concurrent saves
     const port = portProbe.address().port;
     await new Promise(r=>portProbe.close(r));
     let logs='';
-    child = spawn(process.execPath,[bundle],{cwd:scratch,windowsHide:true,stdio:['ignore','pipe','pipe'],env:{...process.env,DATABASE_URL:dbUrl.toString(),PORT:String(port),NODE_PATH:path.join(root,'node_modules')}});
+    child = spawn(process.execPath,[bundle],{cwd:scratch,windowsHide:true,stdio:['ignore','pipe','pipe'],env:{...process.env,DATABASE_URL:dbUrl.toString(),SCHEDULE_TIMEZONE:'Asia/Yekaterinburg',PORT:String(port),NODE_PATH:path.join(root,'node_modules')}});
     child.stdout.on('data',b=>logs+=b); child.stderr.on('data',b=>logs+=b);
     const base=`http://127.0.0.1:${port}`;
     let ready=false;
@@ -74,6 +80,46 @@ test('sessions, password migration, permissions, validation and concurrent saves
       const hashes=(await admin.query(`SELECT password FROM "${schema}".users`)).rows;
       assert.ok(hashes.every(v=>v.password.startsWith('scrypt$')));assert.notEqual(hashes[1].password,hashes[2].password);
       assert.equal((await call('POST','/api/auth/login',{username:'legacy_user',password:'wrong'})).status,401);
+    });
+    await t.test('manual overrides migrate losslessly to relational dates and timestamptz intervals',async()=>{
+      assert.deepEqual(a.data.overrides,legacyOverrides);
+      assert.deepEqual(a.data.schedule_config,{mode:'manual'});
+      const cols=await admin.query("SELECT 1 FROM information_schema.columns WHERE table_schema=$1 AND table_name='users' AND column_name='overrides'",[schema]);
+      assert.equal(cols.rows.length,0);
+      const count=(await admin.query(`SELECT (SELECT count(*)::int FROM "${schema}".day_overrides) AS days,(SELECT count(*)::int FROM "${schema}".occupancy_intervals) AS slots`)).rows[0];
+      assert.deepEqual(count,{days:3,slots:4});
+      const listing=await call('GET',`/api/users/${a.data.id}/overrides?from=2026-09-01&to=2026-09-30`,undefined,a.cookies);
+      assert.equal(listing.status,200);assert.equal(listing.data.days.length,3);
+      assert.deepEqual(listing.data.days[0].intervals,[]);assert.equal(listing.data.days[0].status,'free');
+      const day=listing.data.days[1];assert.equal(day.timeZone,'Asia/Yekaterinburg');
+      assert.equal(new Date(day.intervals[0].startsAt).toISOString(),'2026-09-02T01:00:00.000Z');
+      assert.equal(new Date(day.intervals[0].endsAt).toISOString(),'2026-09-02T09:00:00.000Z');
+      assert.equal(day.intervals[0].note,'Первая смена');
+      const night=listing.data.days[2];
+      assert.equal(new Date(night.intervals[0].endsAt).toISOString(),'2026-09-04T01:00:00.000Z');
+      assert.equal(new Date(night.intervals[1].endsAt).toISOString(),'2026-09-03T19:00:00.000Z');
+      assert.equal((await call('GET',`/api/users/${a.data.id}/overrides`,undefined,b.cookies)).status,403);
+      assert.equal((await call('GET',`/api/users/${a.data.id}/overrides?from=2026-10-31&to=2026-10-01`,undefined,a.cookies)).status,400);
+      const one=await call('GET',`/api/users/${a.data.id}/overrides/2026-09-02`,undefined,a.cookies);
+      assert.deepEqual(one.data.override,legacyOverrides['2026-09-02']);
+      assert.equal((await call('GET',`/api/users/${a.data.id}/overrides/2026-09-20`,undefined,a.cookies)).data.override,null);
+      await assert.rejects(admin.query(`INSERT INTO "${schema}".occupancy_intervals(user_id,override_date,position,starts_at,ends_at)
+        VALUES($1,'2026-09-02',999,'2026-09-02T12:00:00Z','2026-09-02T11:00:00Z')`,[a.data.id]),{code:'23514'});
+    });
+    await t.test('manual migration and auth initialization remain idempotent after creating views',async()=>{
+      const db=new pg.Client({connectionString:dbUrl.toString()});await db.connect();
+      try {
+        const before=(await db.query('SELECT id,overrides,schedule_config FROM user_profiles ORDER BY id')).rows;
+        const beforeIds=(await db.query('SELECT id::text FROM occupancy_intervals ORDER BY id')).rows;
+        const load=(filename)=>{
+          const output=esbuild.buildSync({entryPoints:[path.join(root,'server',filename)],bundle:true,packages:'external',platform:'node',format:'cjs',write:false,logLevel:'silent'}).outputFiles[0].text;
+          const mod={exports:{}};new Function('require','module','exports',output)(require,mod,mod.exports);return mod.exports;
+        };
+        await load('auth.ts').initAuth(db);
+        await load('manual-overrides.ts').migrateManualOverrides(db);
+        assert.deepEqual((await db.query('SELECT id,overrides,schedule_config FROM user_profiles ORDER BY id')).rows,before);
+        assert.deepEqual((await db.query('SELECT id::text FROM occupancy_intervals ORDER BY id')).rows,beforeIds);
+      }finally{await db.end();}
     });
     await t.test('role_title is dropped and legacy pattern icons become files',async()=>{
       const cols=await admin.query("SELECT 1 FROM information_schema.columns WHERE table_schema=$1 AND table_name='users' AND column_name='role_title'",[schema]);
@@ -149,11 +195,25 @@ test('sessions, password migration, permissions, validation and concurrent saves
       const both=await Promise.all(['2026-10-27','2026-10-28'].map(date=>call('PUT',`/api/users/${a.data.id}/overrides/${date}`,{expectedOverride:null,override},a.cookies)));
       assert.deepEqual(both.map(r=>r.status),[200,200]);
       const me=await call('GET','/api/auth/me',undefined,a.cookies);
-      assert.equal(Object.keys(me.data.overrides).length,2);assert.equal(me.data.overrides['2026-10-27'].slots.length,2);
+      assert.equal(Object.keys(me.data.overrides).length,Object.keys(legacyOverrides).length+2);assert.equal(me.data.overrides['2026-10-27'].slots.length,2);
       assert.equal((await call('PUT',`/api/users/${a.data.id}/overrides/2026-10-27`,{expectedOverride:null,override},a.cookies)).status,409);
       assert.equal((await call('DELETE',`/api/users/${a.data.id}/overrides/2026-10-27`,{expectedOverride:null},a.cookies)).status,409);
       assert.equal((await call('DELETE',`/api/users/${a.data.id}/overrides/2026-10-27`,{expectedOverride:override},a.cookies)).status,200);
       assert.ok((await call('GET','/api/auth/me',undefined,a.cookies)).data.overrides['2026-10-28']);
+    });
+    await t.test('same-day concurrent edits conflict and deletion cascades only that day',async()=>{
+      const date='2026-10-31';
+      const results=await Promise.all(['A','B'].map(note=>call('PUT',`/api/users/${a.data.id}/overrides/${date}`,{expectedOverride:null,override:{...override,note}},a.cookies)));
+      assert.deepEqual(results.map(r=>r.status).sort(),[200,409]);
+      const value=results.find(r=>r.status===200).data.override;
+      const count=(await admin.query(`SELECT count(*)::int AS n FROM "${schema}".occupancy_intervals WHERE user_id=$1 AND override_date=$2`,[a.data.id,date])).rows[0].n;
+      assert.equal(count,2);
+      assert.equal((await call('DELETE',`/api/users/${a.data.id}/overrides/${date}`,{expectedOverride:value},a.cookies)).status,200);
+      assert.equal((await admin.query(`SELECT count(*)::int AS n FROM "${schema}".occupancy_intervals WHERE user_id=$1 AND override_date=$2`,[a.data.id,date])).rows[0].n,0);
+      assert.equal((await call('GET',`/api/users/${a.data.id}/overrides?from=${date}&to=${date}`,undefined,a.cookies)).data.days.length,0);
+      const me=(await call('GET','/api/auth/me',undefined,a.cookies)).data;
+      assert.deepEqual(me.overrides['2026-09-01'],legacyOverrides['2026-09-01']);
+      assert.equal((await call('PUT',`/api/users/${a.data.id}`,{revision:me.revision,overrides:{}},a.cookies)).status,400);
     });
     await t.test('profile CAS rejects stale versions and preserves schedule fields',async()=>{
       const me=(await call('GET','/api/auth/me',undefined,a.cookies)).data;
@@ -209,6 +269,10 @@ test('sessions, password migration, permissions, validation and concurrent saves
       assert.ok(r.data.components.securitySchemes.cookieSession);
       assert.ok(r.data.components.schemas.UpdateUserRequest.required.includes('revision'));
       assert.ok(r.data.paths['/api/users/{id}/overrides/{date}'].put.requestBody.content['application/json'].schema.required.includes('expectedOverride'));
+      assert.ok(r.data.paths['/api/users/{id}/overrides'].get);
+      assert.ok(r.data.paths['/api/users/{id}/overrides/{date}'].get);
+      assert.equal(r.data.components.schemas.ManualInterval.properties.startsAt.format,'date-time');
+      assert.equal(r.data.components.schemas.UpdateUserRequest.properties.overrides,undefined);
     });
     await t.test('password change revokes old sessions and preserves new login',async()=>{
       const oldCookies=a.cookies;

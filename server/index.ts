@@ -1,4 +1,6 @@
 import express from "express";
+import { migrateManualOverrides } from "./manual-overrides";
+import { USER_COLUMNS } from "./user-routes";
 import { createPatternMedia } from "./pattern-media";
 import { initAuth, installAuth, issueSession, hashPassword, verifyPassword } from "./auth";
 import { installUserRoutes } from "./user-routes";
@@ -113,7 +115,6 @@ async function initDb() {
         password TEXT NOT NULL,
         avatar_color VARCHAR(32) DEFAULT '#3B82F6',
         schedule_config JSONB NOT NULL DEFAULT '{}'::jsonb,
-        overrides JSONB NOT NULL DEFAULT '{}'::jsonb,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
 
@@ -146,6 +147,7 @@ async function initDb() {
     `);
 
     await initAuth(client);
+    await migrateManualOverrides(client);
     await patternMedia.migrate(client);
 
     // Automatically migrate any legacy base64 avatar_url / banner_url stored in DB into static /uploads files
@@ -318,7 +320,7 @@ app.get("/api/users/:id", async (req, res) => {
   try {
     const userId = parseInt(req.params.id, 10);
     const { rows } = await pool.query(
-      "SELECT id, username, display_name, avatar_color, avatar_url, banner_url, timeline_style, member_orders, schedule_config, overrides, revision, created_at FROM users WHERE id = $1",
+      "SELECT id, username, display_name, avatar_color, avatar_url, banner_url, timeline_style, member_orders, schedule_config, overrides, revision, created_at FROM user_profiles WHERE id = $1",
       [userId]
     );
     if (rows.length === 0) return res.status(404).json({ error: "Не найден" });
@@ -355,7 +357,7 @@ app.post("/api/auth/login", async (req, res) => {
     const { username, password } = parsed.data;
     const cleanUsername = username.toLowerCase().replace(/^@/, "");
     const { rows } = await pool.query(
-      "SELECT id, username, display_name, password, avatar_color, avatar_url, banner_url, timeline_style, member_orders, schedule_config, overrides, revision FROM users WHERE LOWER(username) = $1",
+      "SELECT id, username, display_name, password, avatar_color, avatar_url, banner_url, timeline_style, member_orders, schedule_config, overrides, revision FROM user_profiles WHERE LOWER(username) = $1",
       [cleanUsername]
     );
     if (rows.length === 0) {
@@ -402,9 +404,9 @@ app.post("/api/auth/register", async (req, res) => {
     };
 
     const { rows } = await pool.query(
-      `INSERT INTO users (username, display_name, password, avatar_color, schedule_config, overrides)
-       VALUES ($1, $2, $3, $4, $5, '{}'::jsonb)
-       RETURNING id, username, display_name, avatar_color, avatar_url, banner_url, timeline_style, member_orders, schedule_config, overrides, revision`,
+      `INSERT INTO users (username, display_name, password, avatar_color, schedule_config)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id`,
       [
         cleanUsername,
         display_name.trim(),
@@ -414,7 +416,8 @@ app.post("/api/auth/register", async (req, res) => {
       ]
     );
     await issueSession(pool, req, res, rows[0].id);
-    res.json(rows[0]);
+    const profile = await pool.query(`SELECT ${USER_COLUMNS} FROM user_profiles WHERE id=$1`, [rows[0].id]);
+    res.json(profile.rows[0]);
     broadcastUpdate("user_registered", { id: rows[0].id });
   } catch (err: any) {
     if (err.code === "23505") {
@@ -496,7 +499,7 @@ app.get("/api/groups", async (req, res) => {
               u.schedule_config, u.overrides, u.revision,
               inv.display_name as invited_by_name, inv.username as invited_by_username
        FROM group_members gm
-       JOIN users u ON gm.user_id = u.id
+       JOIN user_profiles u ON gm.user_id = u.id
        LEFT JOIN users inv ON gm.invited_by = inv.id
        WHERE gm.group_id = ANY($1::int[])
        ORDER BY gm.joined_at ASC`,
@@ -546,13 +549,13 @@ app.get("/api/users", async (req, res) => {
     const rawUname = req.query.username ? String(req.query.username).trim().toLowerCase().replace(/^@/, "") : "";
     if (rawUname) {
       const { rows } = await pool.query(
-        "SELECT id, username, display_name, avatar_color, avatar_url, schedule_config, overrides, revision, created_at FROM users WHERE LOWER(username) LIKE $1 ORDER BY id ASC",
+        "SELECT id, username, display_name, avatar_color, avatar_url, schedule_config, overrides, revision, created_at FROM user_profiles WHERE LOWER(username) LIKE $1 ORDER BY id ASC",
         [`%${rawUname}%`]
       );
       return res.json(rows);
     }
     const { rows } = await pool.query(
-      "SELECT id, username, display_name, avatar_color, avatar_url, schedule_config, overrides, revision, created_at FROM users ORDER BY id ASC"
+      "SELECT id, username, display_name, avatar_color, avatar_url, schedule_config, overrides, revision, created_at FROM user_profiles ORDER BY id ASC"
     );
     res.json(rows);
   } catch (err: any) {
@@ -576,7 +579,7 @@ app.get("/api/groups/:groupId/availability", async (req, res) => {
       `SELECT u.id, u.username, u.display_name, u.avatar_color, u.avatar_url,
               u.schedule_config, u.overrides
        FROM group_members gm
-       JOIN users u ON gm.user_id = u.id
+       JOIN user_profiles u ON gm.user_id = u.id
        WHERE gm.group_id = $1 AND gm.status = 'accepted'
        ORDER BY gm.joined_at ASC`,
       [groupId]

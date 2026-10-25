@@ -30,7 +30,11 @@ export async function verifyPassword(password: string, encoded: string) {
 export async function initAuth(client: PoolClient) {
   await client.query("BEGIN");
   try {
-    await client.query(`ALTER TABLE users ALTER COLUMN password TYPE TEXT;
+    await client.query(`DO $$ BEGIN
+      IF EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid='users'::regclass AND attname='password' AND atttypid<>'text'::regtype) THEN
+        ALTER TABLE users ALTER COLUMN password TYPE TEXT;
+      END IF;
+      END $$;
       ALTER TABLE users ALTER COLUMN password DROP DEFAULT;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS revision INTEGER NOT NULL DEFAULT 0;
       CREATE TABLE IF NOT EXISTS auth_sessions (

@@ -1,3 +1,5 @@
+import { describeManualOverrides } from "./manual-openapi";
+
 export function getOpenApiSpec(baseUrl = "http://localhost:5173") {
   const spec: any = {
     openapi: "3.1.0",
@@ -1075,6 +1077,7 @@ export function getOpenApiSpec(baseUrl = "http://localhost:5173") {
   spec.paths["/api/auth/me"] = { get: { operationId: "getSessionUser", summary: "Текущий пользователь по серверной сессии", responses: { "200": { description: "Профиль с revision", content: { "application/json": { schema: { $ref: "#/components/schemas/User" } } } }, "401": { description: "Сессия отсутствует или истекла" } } } };
   spec.paths["/api/auth/logout"] = { post: { operationId: "logout", summary: "Отозвать текущую сессию", requestBody: { content: { "application/json": { schema: { type: "object" }, example: {} } } }, responses: { "200": { description: "Сессия отозвана" } } } };
   spec.paths["/api/auth/switch"] = { post: { operationId: "switchAccount", security: [], summary: "Переключиться на ранее подтверждённый аккаунт по его cookie", requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["userId"], properties: { userId: { type: "integer" } } } } } }, responses: { "200": { description: "Аккаунт переключён" }, "401": { description: "Для аккаунта нужно снова ввести пароль" } } } };
+  describeManualOverrides(spec);
   return spec;
 }
 
@@ -1092,6 +1095,7 @@ GET /api/auth/me возвращает подтверждённого польз�
 Все изменения требуют Content-Type: application/json. Изменять можно свой аккаунт, права в группах проверяет сервер.
 Для PUT профиля и PATCH расписания передавайте revision из прочитанного профиля.
 Для изменения/удаления дня передавайте expectedOverride из overrides[date]; null означает, что записи не было.
+Можно получить точный снимок через GET /api/users/{id}/overrides/{date} и передать его override как expectedOverride.
 При HTTP 409 перечитайте данные и согласуйте изменения. Не повторяйте автоматически устаревшую запись.
 В примерах ниже revision=0 и expectedOverride=null нужно заменить фактически прочитанными значениями.
 
@@ -1109,6 +1113,12 @@ GET /api/auth/me возвращает подтверждённого польз�
 3. **Правки на конкретную дату (\`overrides\`)**:
    - Словарь \`{ "YYYY-MM-DD": { status: "working" | "free" | "partial", slots: [{ start: "HH:MM", end: "HH:MM" }], note?: string } }\`.
    - Правка на дату имеет приоритет над базовым графиком.
+   - В БД это day_overrides (дата, статус, общая заметка, IANA-зона) и occupancy_intervals (starts_at/ends_at типа timestamptz, заметка, порядок). JSONB overrides в users удалён; карта в API вычисляется из таблиц.
+   - GET /api/users/{id}/overrides?from=2026-10-01&to=2026-10-31 возвращает days[] с timeZone и intervals[]: id (строка), startsAt/endsAt (RFC3339), note, position. Фильтр включителен по исходной дате правки. Постоянные правила сюда не входят.
+   - Для записи используйте PUT /overrides/{date}; идентификаторы интервалов заменённого дня меняются. PUT профиля не принимает overrides.
+   - HH:MM трактуется в зоне дня; для новых дней используется SCHEDULE_TIMEZONE, по умолчанию Asia/Yekaterinburg. Конец раньше начала означает переход через полночь; 24:00 допустимо только для конца. Пересечения разрешены.
+   - note — общая заметка дня; slots[].label — заметка интервала (note в интервальном ответе).
+   - PUT status=free со slots=[] явно делает день свободным. DELETE возвращает применение базового графика и удаляет интервалы только этой правки.
 
 ---
 

@@ -44,5 +44,4 @@ export const profileSchema = z.object({
   avatar_url: z.string().max(20_000_000).nullable().optional(),
   banner_url: z.string().max(20_000_000).nullable().optional(),
   timeline_style: styleSchema.optional(), schedule_config: scheduleSchema.optional(),
-  overrides: z.record(dateSchema, overrideSchema).optional(),
 }).strict();
