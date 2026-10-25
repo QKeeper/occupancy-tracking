@@ -10,6 +10,7 @@ import { User } from "@/types";
 import {
   computeContinuousFreeOverlap,
   computeUserContinuousBusyBlocks,
+  layoutBusyBlocks,
 } from "@/lib/schedule-engine";
 import { getTimelineBlockStyle } from "@/lib/timeline-pattern";
 import {
@@ -62,6 +63,9 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
 }) => {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const minimapRef = useRef<HTMLDivElement>(null);
+  const minimapViewportRef = useRef<HTMLDivElement>(null);
+  const persistPositionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingDayOffsetRef = useRef<number | null>(null);
   const [hourWidth, setHourWidth] = useState<number>(() => {
     const saved = localStorage.getItem(STORAGE_HOUR_WIDTH_KEY);
     const parsed = saved ? Number(saved) : NaN;
@@ -83,15 +87,13 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
   const isPointerDownRef = useRef<boolean>(false);
   const hasDraggedRef = useRef<boolean>(false);
   const dragStartXRef = useRef<number>(0);
+  const dragStartScrollLeftRef = useRef<number>(0);
+  const dragRafRef = useRef<number | null>(null);
   const lastPointerXRef = useRef<number>(0);
   const velocitySamplesRef = useRef<Array<{ x: number; t: number }>>([]);
   const inertiaRafRef = useRef<number | null>(null);
 
   // Viewport tracking for the VSCode-style minimap
-  const [viewportRatio, setViewportRatio] = useState<{ start: number; width: number }>({
-    start: 0,
-    width: 0.25,
-  });
   const isDraggingMinimapRef = useRef(false);
 
   // Vertical-only drag-and-drop state for reordering members
@@ -143,12 +145,27 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
 
   // Precompute busy blocks for each member
   const busyBlocksByMember = useMemo(() => {
-    const map: Record<number, ReturnType<typeof computeUserContinuousBusyBlocks>> = {};
+    const map: Record<number, ReturnType<typeof layoutBusyBlocks>> = {};
     for (const m of members) {
-      map[m.id] = computeUserContinuousBusyBlocks(m, days);
+      map[m.id] = layoutBusyBlocks(computeUserContinuousBusyBlocks(m, days));
     }
     return map;
   }, [members, days]);
+
+  // Generate each member's pattern once, rather than once per busy block/render.
+  const blockStylesByMember = useMemo(() => {
+    const styles: Record<number, React.CSSProperties> = {};
+    for (const member of members) {
+      styles[member.id] = getTimelineBlockStyle(
+        member.id === currentUser.id ? currentUser.timeline_style : member.timeline_style
+      );
+    }
+    return styles;
+  }, [members, currentUser.id, currentUser.timeline_style]);
+
+  const hourGridStyle = (opacity: number): React.CSSProperties => ({
+    backgroundImage: `repeating-linear-gradient(to right, transparent 0px, transparent ${hourWidth - 1}px, color-mix(in oklab, var(--border) ${opacity}%, transparent) ${hourWidth - 1}px, color-mix(in oklab, var(--border) ${opacity}%, transparent) ${hourWidth}px)`,
+  });
 
   const minToPx = (mins: number) => (mins / 60) * hourWidth;
 
@@ -158,20 +175,48 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
 
   const hourStep = hourWidth < 24 ? 4 : hourWidth < 34 ? 2 : 1;
 
-  // Update minimap viewport box on scroll or zoom, and persist dayOffset in localStorage
+  const persistPosition = useCallback(() => {
+    if (persistPositionTimerRef.current !== null) {
+      clearTimeout(persistPositionTimerRef.current);
+      persistPositionTimerRef.current = null;
+    }
+    if (pendingDayOffsetRef.current !== null) {
+      localStorage.setItem(STORAGE_DAY_OFFSET_KEY, String(pendingDayOffsetRef.current));
+      pendingDayOffsetRef.current = null;
+    }
+  }, []);
+
+  // Move only the minimap overlay; scrolling must not rerender the calendar.
   const updateViewportMetrics = useCallback(() => {
     const el = scrollContainerRef.current;
     if (!el) return;
     const totalW = Math.max(1, el.scrollWidth);
     const start = Math.max(0, Math.min(1, el.scrollLeft / totalW));
     const width = Math.max(0.03, Math.min(1 - start, el.clientWidth / totalW));
-    setViewportRatio({ start, width });
+    const viewport = minimapViewportRef.current;
+    if (viewport) {
+      viewport.style.transform = `translateX(${start * 100}%)`;
+      // The outer overlay spans the minimap, so translation uses minimap width.
+      viewport.style.setProperty("--viewport-width", `${width * 100}%`);
+    }
 
     const dayOffset = el.scrollLeft / dayWidth;
     currentDayOffsetRef.current = dayOffset;
-    localStorage.setItem(STORAGE_DAY_OFFSET_KEY, String(dayOffset));
+    pendingDayOffsetRef.current = dayOffset;
+    if (persistPositionTimerRef.current !== null) {
+      clearTimeout(persistPositionTimerRef.current);
+    }
+    persistPositionTimerRef.current = setTimeout(persistPosition, 200);
     onScrollDayOffsetChange?.(dayOffset);
-  }, [dayWidth, onScrollDayOffsetChange]);
+  }, [dayWidth, onScrollDayOffsetChange, persistPosition]);
+
+  useEffect(() => {
+    window.addEventListener("pagehide", persistPosition);
+    return () => {
+      window.removeEventListener("pagehide", persistPosition);
+      persistPosition();
+    };
+  }, [persistPosition]);
 
   // Persist hourWidth in localStorage and preserve the currently viewed point when zooming
   useLayoutEffect(() => {
@@ -278,11 +323,20 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
     isPointerDownRef.current = true;
     hasDraggedRef.current = false;
     dragStartXRef.current = e.clientX;
+    dragStartScrollLeftRef.current = scrollContainerRef.current?.scrollLeft ?? 0;
     lastPointerXRef.current = e.clientX;
     velocitySamplesRef.current = [{ x: e.clientX, t: performance.now() }];
   };
 
   useEffect(() => {
+    const applyDragScroll = () => {
+      dragRafRef.current = null;
+      const scroller = scrollContainerRef.current;
+      if (!scroller) return;
+      scroller.scrollLeft =
+        dragStartScrollLeftRef.current - (lastPointerXRef.current - dragStartXRef.current);
+    };
+
     const handleMouseMove = (e: MouseEvent) => {
       const mDrag = memberDragRef.current;
       if (mDrag) {
@@ -339,9 +393,10 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
         setIsDraggingTimeline(true);
       }
 
-      const deltaX = e.clientX - lastPointerXRef.current;
       lastPointerXRef.current = e.clientX;
-      scroller.scrollLeft -= deltaX;
+      if (dragRafRef.current === null) {
+        dragRafRef.current = requestAnimationFrame(applyDragScroll);
+      }
 
       const now = performance.now();
       const samples = velocitySamplesRef.current;
@@ -375,6 +430,11 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
       }
 
       if (!isPointerDownRef.current) return;
+      // Flush the latest movement before starting inertia, even between frames.
+      if (dragRafRef.current !== null) {
+        cancelAnimationFrame(dragRafRef.current);
+        applyDragScroll();
+      }
       isPointerDownRef.current = false;
       setIsDraggingTimeline(false);
 
@@ -415,6 +475,8 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
               inertiaRafRef.current = requestAnimationFrame(stepInertia);
             } else {
               inertiaRafRef.current = null;
+              updateViewportMetrics();
+              persistPosition();
             }
           };
 
@@ -428,8 +490,12 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
     return () => {
       window.removeEventListener("mousemove", handleMouseMove);
       window.removeEventListener("mouseup", handleMouseUp);
+      if (dragRafRef.current !== null) {
+        cancelAnimationFrame(dragRafRef.current);
+        dragRafRef.current = null;
+      }
     };
-  }, []);
+  }, [updateViewportMetrics, persistPosition]);
 
   useEffect(() => {
     return () => stopInertia();
@@ -695,26 +761,24 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
                       </div>
 
                       {/* Нижний уровень: Часы 0:00 .. 23:00 */}
-                      <div className="relative flex-1 flex items-center bg-background/60">
-                        {HOURS_24.map((h) => {
-                          const showLabel = h % hourStep === 0;
-                          return (
-                            <div
-                              key={h}
-                              style={{ width: `${hourWidth}px`, minWidth: `${hourWidth}px` }}
-                              className="h-full border-r border-border/35 flex items-center pl-1"
-                            >
-                              {showLabel && (
-                                <span className="text-[10px] font-mono text-foreground/80 leading-none">
-                                  {h}
-                                  <span className="text-[8px] align-top text-muted-foreground/45 ml-px">
-                                    :00
-                                  </span>
-                                </span>
-                              )}
-                            </div>
-                          );
-                        })}
+                      <div
+                        className="relative flex-1 bg-background/60"
+                        style={hourGridStyle(35)}
+                      >
+                        {HOURS_24.filter((h) => h % hourStep === 0).map((h) => (
+                          <div
+                            key={h}
+                            style={{ left: `${h * hourWidth + 4}px` }}
+                            className="absolute inset-y-0 flex items-center"
+                          >
+                            <span className="text-[10px] font-mono text-foreground/80 leading-none">
+                              {h}
+                              <span className="text-[8px] align-top text-muted-foreground/45 ml-px">
+                                :00
+                              </span>
+                            </span>
+                          </div>
+                        ))}
                       </div>
                     </div>
                   );
@@ -755,7 +819,11 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
                                   onCellClick(member, day);
                                 }
                               }}
-                              style={{ width: `${dayWidth}px`, minWidth: `${dayWidth}px` }}
+                              style={{
+                                width: `${dayWidth}px`,
+                                minWidth: `${dayWidth}px`,
+                                ...hourGridStyle(25),
+                              }}
                               className={`relative h-full border-r border-border flex ${
                                 isDraggingTimeline
                                   ? "cursor-grabbing"
@@ -764,13 +832,6 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
                                   : "cursor-grab"
                               }`}
                             >
-                              {HOURS_24.map((h) => (
-                                <div
-                                  key={h}
-                                  style={{ width: `${hourWidth}px`, minWidth: `${hourWidth}px` }}
-                                  className="h-full border-r border-border/25 pointer-events-none"
-                                />
-                              ))}
                               {today && (
                                 <div
                                   style={{ left: `${nowOffsetPx}px` }}
@@ -808,7 +869,7 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
                           );
                         })}
 
-                      {/* Слой 3: Красные области занятости на полную высоту */}
+                      {/* Слой 3: Отдельные интервалы, пересечения на разных уровнях */}
                       {busyBlocks.map((block, bIdx) => {
                         const leftPx = minToPx(block.startMin);
                         const widthPx = Math.max(4, minToPx(block.endMin - block.startMin));
@@ -830,11 +891,11 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
                                 style={{
                                   left: `${leftPx}px`,
                                   width: `${widthPx}px`,
-                                  ...getTimelineBlockStyle(
-                                    isMe ? currentUser.timeline_style : member.timeline_style
-                                  ),
+                                  top: `${(block.lane / block.laneCount) * 100}%`,
+                                  height: `${100 / block.laneCount}%`,
+                                  ...blockStylesByMember[member.id],
                                 }}
-                                className={`absolute -top-px -bottom-px z-10 border-x flex items-center gap-1.5 px-1.5 overflow-clip text-white ${
+                                className={`absolute z-10 rounded-[2px] flex items-center gap-1.5 px-1.5 overflow-clip text-white ${
                                   isDraggingTimeline
                                     ? "cursor-grabbing "
                                     : isMe
@@ -995,12 +1056,14 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
 
             {/* Ползунок-рамка видимой области (VSCode Minimap Viewport Slider) */}
             <div
-              style={{
-                left: `${viewportRatio.start * 100}%`,
-                width: `${viewportRatio.width * 100}%`,
-              }}
-              className="absolute inset-y-0 bg-foreground/10 border-x-2 border-primary/80 pointer-events-none transition-[width] duration-75"
-            />
+              ref={minimapViewportRef}
+              className="absolute inset-0 pointer-events-none"
+            >
+              <div
+                style={{ width: "var(--viewport-width, 25%)" }}
+                className="absolute inset-y-0 left-0 bg-foreground/10 border-x-2 border-primary/80 transition-[width] duration-75"
+              />
+            </div>
           </div>
         </div>
       </div>

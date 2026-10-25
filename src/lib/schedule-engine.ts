@@ -259,17 +259,17 @@ export interface ContinuousBusyBlock extends ContinuousInterval {
 }
 
 /**
- * Merges busy slots of a single user across consecutive days so blocks that touch at 00:00
- * or span overnight are continuous.
+ * Keeps each busy slot separate, with overnight slots continuous across midnight.
  */
 export function computeUserContinuousBusyBlocks(
   user: User,
   days: Date[]
 ): ContinuousBusyBlock[] {
   const raw: ContinuousBusyBlock[] = [];
+  if (days.length === 0) return raw;
 
   const totalMins = days.length * 1440;
-  dataForEach: for (let dIdx = -1; dIdx < days.length; dIdx++) {
+  for (let dIdx = -1; dIdx < days.length; dIdx++) {
     const day = dIdx === -1 ? new Date(days[0].getTime() - 86400000) : days[dIdx];
     const sched = getUserDaySchedule(user, day);
     const dayOffset = dIdx * 1440;
@@ -310,27 +310,42 @@ export function computeUserContinuousBusyBlocks(
 
   raw.sort((a, b) => a.startMin - b.startMin);
 
-  const merged: ContinuousBusyBlock[] = [];
-  for (const item of raw) {
-    const prev = merged[merged.length - 1];
-    if (
-      prev &&
-      prev.endMin >= item.startMin &&
-      prev.isOverride === item.isOverride
-    ) {
-      if (item.endMin > prev.endMin) {
-        prev.endMin = item.endMin;
-        prev.endTimeLabel = item.endTimeLabel;
-      }
-      if (!prev.note && item.note) {
-        prev.note = item.note;
-      }
-    } else {
-      merged.push({ ...item });
-    }
-  }
+  return raw;
+}
 
-  return merged;
+export interface TimelineBusyBlock extends ContinuousBusyBlock {
+  lane: number;
+  laneCount: number;
+}
+
+/** Pack overlapping slots into lanes, sharing height only within each overlap group. */
+export function layoutBusyBlocks(blocks: ContinuousBusyBlock[]): TimelineBusyBlock[] {
+  const sorted = [...blocks].sort((a, b) => a.startMin - b.startMin || b.endMin - a.endMin);
+  const result: TimelineBusyBlock[] = [];
+  let group: TimelineBusyBlock[] = [];
+  let groupEnd = -Infinity;
+  let laneEnds: number[] = [];
+  const finishGroup = () => {
+    for (const block of group) block.laneCount = laneEnds.length;
+  };
+
+  for (const block of sorted) {
+    if (block.startMin >= groupEnd) {
+      finishGroup();
+      group = [];
+      laneEnds = [];
+      groupEnd = -Infinity;
+    }
+    let lane = laneEnds.findIndex((end) => end <= block.startMin);
+    if (lane === -1) lane = laneEnds.length;
+    laneEnds[lane] = block.endMin;
+    groupEnd = Math.max(groupEnd, block.endMin);
+    const placed = { ...block, lane, laneCount: 1 };
+    group.push(placed);
+    result.push(placed);
+  }
+  finishGroup();
+  return result;
 }
 
 /**

@@ -126,7 +126,7 @@ export function getTimelineBlockStyle(config?: Partial<TimelineStyleConfig>): Re
   const iconScale = Math.max(0.5, Math.min(2.2, Number(config?.iconScale) || 1));
 
   const baseBg = hexToRgba(bgColor, 0.86);
-  const borderCol = hexToRgba(patternColor, 0.75);
+  const borderCol = patternColor;
 
   if (patternType === "stripes") {
     const stripeCol = hexToRgba(patternColor, 0.28);
