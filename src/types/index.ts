@@ -1,7 +1,6 @@
 export interface TimeSlot {
   start: string; // "HH:MM", e.g. "09:00"
   end: string;   // "HH:MM", e.g. "18:00"
-  label?: string;
 }
 
 export interface DayWeeklySchedule {

@@ -817,7 +817,6 @@ export function getOpenApiSpec(baseUrl = "http://localhost:5173") {
           properties: {
             start: { type: "string", pattern: "^\\d{2}:\\d{2}$", example: "09:00" },
             end: { type: "string", pattern: "^\\d{2}:\\d{2}$", example: "18:00" },
-            label: { type: "string", example: "Работа" },
           },
         },
         DayWeeklySchedule: {
@@ -1125,11 +1124,11 @@ GET /api/auth/me возвращает подтверждённого польз�
 3. **Правки на конкретную дату (\`overrides\`)**:
    - Словарь \`{ "YYYY-MM-DD": { status: "working" | "free" | "partial", slots: [{ start: "HH:MM", end: "HH:MM" }], note?: string } }\`.
    - Правка на дату имеет приоритет над базовым графиком.
-   - В БД это day_overrides (дата, статус, общая заметка, IANA-зона) и occupancy_intervals (starts_at/ends_at типа timestamptz, заметка, порядок). JSONB overrides в users удалён; карта в API вычисляется из таблиц.
-   - GET /api/users/{id}/overrides?from=2026-10-01&to=2026-10-31 возвращает days[] с timeZone и intervals[]: id (строка), startsAt/endsAt (RFC3339), note, position. Фильтр включителен по исходной дате правки. Постоянные правила сюда не входят.
+   - В БД это day_overrides (дата, статус, общая заметка, IANA-зона) и occupancy_intervals (starts_at/ends_at типа timestamptz, порядок). JSONB overrides в users удалён; карта в API вычисляется из таблиц.
+   - GET /api/users/{id}/overrides?from=2026-10-01&to=2026-10-31 возвращает days[] с timeZone и intervals[]: id (строка), startsAt/endsAt (RFC3339), position. Фильтр включителен по исходной дате правки. Постоянные правила сюда не входят.
    - Для записи используйте PUT /overrides/{date}; идентификаторы интервалов заменённого дня меняются. PUT профиля не принимает overrides.
    - HH:MM трактуется в зоне дня; для новых дней используется SCHEDULE_TIMEZONE, по умолчанию Asia/Yekaterinburg. Конец раньше начала означает переход через полночь; 24:00 допустимо только для конца. Пересечения разрешены.
-   - note — общая заметка дня; slots[].label — заметка интервала (note в интервальном ответе).
+   - note — заметка дня.
    - PUT status=free со slots=[] явно делает день свободным. DELETE возвращает применение базового графика и удаляет интервалы только этой правки.
 
 ---

@@ -50,7 +50,7 @@ export function installUserRoutes(app: Express, pool: Pool, broadcast: (type: st
       if (query.from && query.to && query.from > query.to) throw new HttpError(400, "Начальная дата позже конечной");
       const { rows } = await pool.query(`SELECT to_char(d.override_date,'YYYY-MM-DD') AS date,
         d.status,d.note,d.time_zone AS "timeZone",
-        COALESCE(jsonb_agg(jsonb_build_object('id',i.id::text,'startsAt',i.starts_at,'endsAt',i.ends_at,'note',i.note,'position',i.position) ORDER BY i.position)
+        COALESCE(jsonb_agg(jsonb_build_object('id',i.id::text,'startsAt',i.starts_at,'endsAt',i.ends_at,'position',i.position) ORDER BY i.position)
           FILTER(WHERE i.id IS NOT NULL),'[]'::jsonb) AS intervals
         FROM day_overrides d LEFT JOIN occupancy_intervals i USING(user_id,override_date)
         WHERE d.user_id=$1 AND ($2::date IS NULL OR d.override_date >= $2::date)

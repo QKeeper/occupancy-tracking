@@ -6,7 +6,7 @@ export const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((s) => 
 }, "Несуществующая дата");
 const startTime = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Неверное время начала");
 const endTime = z.string().regex(/^(([01]\d|2[0-3]):[0-5]\d|24:00)$/, "Неверное время окончания");
-export const slotSchema = z.object({ start: startTime, end: endTime, label: z.string().max(500).optional() })
+export const slotSchema = z.object({ start: startTime, end: endTime })
   .strict().refine((s) => s.start !== s.end, "Начало и конец интервала совпадают");
 const slotsSchema = z.array(slotSchema).max(100);
 const weeklySchema = z.record(z.string().regex(/^[0-6]$/), z.object({

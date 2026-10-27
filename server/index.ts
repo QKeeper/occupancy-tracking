@@ -86,7 +86,6 @@ app.use(
 export interface TimeSlot {
   start: string;
   end: string;
-  label?: string;
 }
 
 export interface ScheduleConfig {

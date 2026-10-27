@@ -40,10 +40,10 @@ overwriting one another. A stale value for the same day returns 409. The client
 keeps the original edit snapshot even when SSE refreshes background data.
 
 Manual overrides are stored in `day_overrides` (user, date, status, day note,
-IANA timezone) and `occupancy_intervals` (start/end `timestamptz`, interval note,
-position). A free day remains a day row with no intervals. Deleting the day
-cascades only its intervals and restores the regular schedule for that day.
-Weekly and shift-cycle rules remain in `users.schedule_config` JSONB.
+IANA timezone) and `occupancy_intervals` (start/end `timestamptz`, position).
+A free day remains a day row with no intervals. Deleting the day cascades only
+its intervals and restores the regular schedule for that day. Weekly and
+shift-cycle rules remain in `users.schedule_config` JSONB.
 
 Startup migrates legacy `users.overrides` in a transaction. It reconstructs and
 compares every old document before dropping the JSONB column; any mismatch rolls
@@ -54,8 +54,9 @@ there is no second writable copy of manual data.
 `SCHEDULE_TIMEZONE` defaults to `Asia/Yekaterinburg` and supplies the zone for new
 manual days and legacy migration. Existing days retain their stored zone. Midnight
 and overnight slots preserve the old `HH:MM` representation, including `24:00`.
-Day `note` is separate from the interval note (`slots[].label` in the write API).
-Overlaps are intentional and no exclusion constraint merges or prohibits them.
+Notes are stored at the day level (`day_overrides.note`); time slots only contain
+`start` and `end`. Overlaps are intentional and no exclusion constraint merges or
+prohibits them.
 
 `GET /api/users/:id/overrides?from=YYYY-MM-DD&to=YYYY-MM-DD` returns own manual
 days and absolute interval timestamps. Both bounds are optional and inclusive on

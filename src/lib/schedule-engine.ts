@@ -691,7 +691,7 @@ export function computeUserContinuousBusyBlocks(
           startTimeLabel,
           endTimeLabel,
           isOverride: sched.isOverride,
-          note: slot.label || sched.note,
+          note: sched.note,
           sourceDate: day,
         });
       }

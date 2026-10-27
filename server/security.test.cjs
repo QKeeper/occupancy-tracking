@@ -34,7 +34,12 @@ test('sessions, password migration, permissions, validation and concurrent saves
     const legacyOverrides = {
       '2026-09-01': {status:'free',slots:[],note:'Выходной'},
       '2026-09-02': {status:'working',slots:[{start:'06:00',end:'14:00',label:'Первая смена'},{start:'10:00',end:'16:00'}],note:'Пересечения'},
-      '2026-09-03': {status:'partial',slots:[{start:'22:00',end:'06:00'},{start:'20:00',end:'24:00',label:''}]},
+      '2026-09-03': {status:'partial',slots:[{start:'22:00',end:'06:00',label:'Работа'},{start:'20:00',end:'24:00',label:'Ночная смена'}]},
+    };
+    const expectedMigratedOverrides = {
+      '2026-09-01': {status:'free',slots:[],note:'Выходной'},
+      '2026-09-02': {status:'working',slots:[{start:'06:00',end:'14:00'},{start:'10:00',end:'16:00'}],note:'Пересечения'},
+      '2026-09-03': {status:'partial',slots:[{start:'22:00',end:'06:00'},{start:'20:00',end:'24:00'}],note:'Ночная смена'},
     };
     await admin.query(`UPDATE "${schema}".users SET overrides=$1 WHERE username='legacy_user'`,[JSON.stringify(legacyOverrides)]);
     const iconData='data:image/svg+xml;base64,'+Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><path d="M2 2h20v20H2z" fill="black"/></svg>').toString('base64');
@@ -82,7 +87,7 @@ test('sessions, password migration, permissions, validation and concurrent saves
       assert.equal((await call('POST','/api/auth/login',{username:'legacy_user',password:'wrong'})).status,401);
     });
     await t.test('manual overrides migrate losslessly to relational dates and timestamptz intervals',async()=>{
-      assert.deepEqual(a.data.overrides,legacyOverrides);
+      assert.deepEqual(a.data.overrides,expectedMigratedOverrides);
       assert.deepEqual(a.data.schedule_config,{mode:'manual'});
       const cols=await admin.query("SELECT 1 FROM information_schema.columns WHERE table_schema=$1 AND table_name='users' AND column_name='overrides'",[schema]);
       assert.equal(cols.rows.length,0);
@@ -94,14 +99,15 @@ test('sessions, password migration, permissions, validation and concurrent saves
       const day=listing.data.days[1];assert.equal(day.timeZone,'Asia/Yekaterinburg');
       assert.equal(new Date(day.intervals[0].startsAt).toISOString(),'2026-09-02T01:00:00.000Z');
       assert.equal(new Date(day.intervals[0].endsAt).toISOString(),'2026-09-02T09:00:00.000Z');
-      assert.equal(day.intervals[0].note,'Первая смена');
+      assert.equal(day.note,'Пересечения');
       const night=listing.data.days[2];
+      assert.equal(night.note,'Ночная смена');
       assert.equal(new Date(night.intervals[0].endsAt).toISOString(),'2026-09-04T01:00:00.000Z');
       assert.equal(new Date(night.intervals[1].endsAt).toISOString(),'2026-09-03T19:00:00.000Z');
       assert.equal((await call('GET',`/api/users/${a.data.id}/overrides`,undefined,b.cookies)).status,403);
       assert.equal((await call('GET',`/api/users/${a.data.id}/overrides?from=2026-10-31&to=2026-10-01`,undefined,a.cookies)).status,400);
       const one=await call('GET',`/api/users/${a.data.id}/overrides/2026-09-02`,undefined,a.cookies);
-      assert.deepEqual(one.data.override,legacyOverrides['2026-09-02']);
+      assert.deepEqual(one.data.override,expectedMigratedOverrides['2026-09-02']);
       assert.equal((await call('GET',`/api/users/${a.data.id}/overrides/2026-09-20`,undefined,a.cookies)).data.override,null);
       await assert.rejects(admin.query(`INSERT INTO "${schema}".occupancy_intervals(user_id,override_date,position,starts_at,ends_at)
         VALUES($1,'2026-09-02',999,'2026-09-02T12:00:00Z','2026-09-02T11:00:00Z')`,[a.data.id]),{code:'23514'});
