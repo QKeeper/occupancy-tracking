@@ -55,6 +55,7 @@ export const profileSchema = z.object({
     )
     .transform((v) => v.replace(/^@/, "").toLowerCase()),
   avatar_color: z.string(),
+  time_zone: z.string().min(1, "Выберите часовой пояс").optional(),
 });
 
 export const changePasswordSchema = z

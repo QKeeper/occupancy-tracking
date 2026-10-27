@@ -6,7 +6,7 @@ import type { TimelineStyleConfig } from "../src/types";
 import { z } from "zod";
 import { dateSchema, overrideSchema, profileSchema, revisionSchema, scheduleFieldsSchema, scheduleSchema } from "./validation";
 
-export const USER_COLUMNS = "id, username, display_name, avatar_color, avatar_url, banner_url, timeline_style, member_orders, schedule_config, overrides, revision, created_at";
+export const USER_COLUMNS = "id, username, display_name, avatar_color, avatar_url, banner_url, timeline_style, member_orders, schedule_config, overrides, revision, created_at, time_zone, is_admin, is_super_admin";
 export function installUserRoutes(app: Express, pool: Pool, broadcast: (type: string, payload: any) => void,
   saveImage: (value: string | null | undefined, kind: "avatar" | "banner") => string | null,
   normalizeStyle: (style: TimelineStyleConfig) => Promise<TimelineStyleConfig>) {

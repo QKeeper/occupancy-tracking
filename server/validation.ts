@@ -16,8 +16,17 @@ const shiftSchema = z.object({
   workDays: z.number().int().min(1).max(366), offDays: z.number().int().min(0).max(366),
   startDate: dateSchema, slots: slotsSchema,
 }).strict();
+export const timeZoneSchema = z.string().trim().min(1).max(128).refine((tz) => {
+  try {
+    Intl.DateTimeFormat(undefined, { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}, "Некорректный часовой пояс");
 export const scheduleFieldsSchema = z.object({
   mode: z.enum(["fixed_weekly", "shift_cycle", "manual"]),
+  timeZone: timeZoneSchema.optional(),
   weekly: weeklySchema.optional(), shift: shiftSchema.optional(),
 }).strict();
 export const scheduleSchema = scheduleFieldsSchema.superRefine((v, ctx) => {
@@ -26,6 +35,7 @@ export const scheduleSchema = scheduleFieldsSchema.superRefine((v, ctx) => {
 });
 export const overrideSchema = z.object({
   status: z.enum(["working", "partial", "free"]), slots: slotsSchema, note: z.string().max(2000).optional(),
+  timeZone: timeZoneSchema.optional(),
 }).strict().refine(v => v.status !== "free" || v.slots.length === 0, "Свободный день не должен содержать интервалы");
 export const usernameSchema = z.string().trim().transform(s => s.replace(/^@/, "").toLowerCase())
   .pipe(z.string().min(2).max(32).regex(/^[a-z0-9_.-]+$/i, "Недопустимый логин"));
@@ -43,5 +53,6 @@ export const profileSchema = z.object({
   avatar_color: color.optional(),
   avatar_url: z.string().max(20_000_000).nullable().optional(),
   banner_url: z.string().max(20_000_000).nullable().optional(),
+  time_zone: timeZoneSchema.optional(),
   timeline_style: styleSchema.optional(), schedule_config: scheduleSchema.optional(),
 }).strict();

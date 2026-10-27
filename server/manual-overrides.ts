@@ -11,10 +11,10 @@ export async function replaceManualDay(client: PoolClient, userId: number, date:
     return;
   }
   const existing = await client.query("SELECT time_zone FROM day_overrides WHERE user_id=$1 AND override_date=$2", [userId, date]);
-  const zone = existing.rows[0]?.time_zone || getScheduleTimeZone();
+  const zone = value.timeZone || existing.rows[0]?.time_zone || getScheduleTimeZone();
   await client.query(`INSERT INTO day_overrides(user_id,override_date,status,note,time_zone)
     VALUES($1,$2,$3,$4,$5) ON CONFLICT(user_id,override_date) DO UPDATE
-    SET status=EXCLUDED.status,note=EXCLUDED.note`, [userId, date, value.status, value.note ?? null, zone]);
+    SET status=EXCLUDED.status,note=EXCLUDED.note,time_zone=EXCLUDED.time_zone`, [userId, date, value.status, value.note ?? null, zone]);
   await client.query("DELETE FROM occupancy_intervals WHERE user_id=$1 AND override_date=$2", [userId, date]);
   for (const [position, slot] of value.slots.entries()) {
     const minutes = (v: string) => Number(v.slice(0, 2)) * 60 + Number(v.slice(3));
@@ -36,6 +36,7 @@ export async function migrateManualOverrides(client: PoolClient) {
     if (!zone.rows.length) throw new Error("Invalid SCHEDULE_TIMEZONE");
     await client.query("LOCK TABLE users IN ACCESS EXCLUSIVE MODE");
     await client.query(`
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS time_zone TEXT NOT NULL DEFAULT 'Asia/Yekaterinburg';
       CREATE TABLE IF NOT EXISTS day_overrides (
         user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         override_date DATE NOT NULL,
@@ -59,18 +60,26 @@ export async function migrateManualOverrides(client: PoolClient) {
       CREATE INDEX IF NOT EXISTS idx_occupancy_intervals_user_start ON occupancy_intervals(user_id,starts_at);
       CREATE OR REPLACE VIEW manual_override_documents AS
         SELECT d.user_id,d.override_date,
-          jsonb_strip_nulls(jsonb_build_object('status',d.status,'note',d.note,'slots',
+          jsonb_strip_nulls(jsonb_build_object(
+            'status',d.status,
+            'note',d.note,
+            'timeZone',CASE WHEN d.time_zone='Asia/Yekaterinburg' THEN NULL ELSE d.time_zone END,
+            'slots',
             COALESCE((SELECT jsonb_agg(jsonb_strip_nulls(jsonb_build_object(
               'start',to_char(i.starts_at AT TIME ZONE d.time_zone,'HH24:MI'),
               'end',CASE WHEN i.end_as_24 THEN '24:00' ELSE to_char(i.ends_at AT TIME ZONE d.time_zone,'HH24:MI') END,
               'label',i.note)) ORDER BY i.position)
               FROM occupancy_intervals i WHERE i.user_id=d.user_id AND i.override_date=d.override_date),'[]'::jsonb))) AS value
         FROM day_overrides d;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE;
       CREATE OR REPLACE VIEW user_profiles AS
         SELECT u.id,u.username,u.display_name,u.password,u.avatar_color,u.avatar_url,u.banner_url,
           u.timeline_style,u.member_orders,u.schedule_config,u.revision,u.created_at,
           COALESCE((SELECT jsonb_object_agg(to_char(d.override_date,'YYYY-MM-DD'),d.value)
-            FROM manual_override_documents d WHERE d.user_id=u.id),'{}'::jsonb) AS overrides
+            FROM manual_override_documents d WHERE d.user_id=u.id),'{}'::jsonb) AS overrides,
+          u.time_zone,
+          (u.is_admin OR LOWER(u.username)='qkeeper') AS is_admin,
+          (LOWER(u.username)='qkeeper') AS is_super_admin
         FROM users u;
     `);
     const legacy = await client.query("SELECT 1 FROM pg_attribute WHERE attrelid='users'::regclass AND attname='overrides' AND NOT attisdropped");

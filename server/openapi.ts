@@ -861,6 +861,11 @@ export function getOpenApiSpec(baseUrl = "http://localhost:5173") {
               enum: ["fixed_weekly", "shift_cycle", "manual"],
               example: "fixed_weekly",
             },
+            timeZone: {
+              type: "string",
+              description: "IANA часовой пояс, в котором заданы слоты базового графика (по умолчанию Asia/Yekaterinburg)",
+              example: "Europe/Moscow",
+            },
             weekly: {
               type: "object",
               description: "Словарь по дням недели: ключи '0' (Воскресенье), '1' (Понедельник) ... '6' (Суббота)",
@@ -890,6 +895,11 @@ export function getOpenApiSpec(baseUrl = "http://localhost:5173") {
               description: "Необязательный комментарий к дню (например, 'Отгул', 'Дежурство', 'Врач')",
               example: "Дежурство",
             },
+            timeZone: {
+              type: "string",
+              description: "Необязательный IANA часовой пояс правки дня (например, 'Europe/Moscow')",
+              example: "Europe/Moscow",
+            },
           },
         },
         User: {
@@ -901,6 +911,7 @@ export function getOpenApiSpec(baseUrl = "http://localhost:5173") {
             avatar_color: { type: "string", example: "#3B82F6" },
             avatar_url: { type: ["string", "null"] },
             banner_url: { type: ["string", "null"] },
+            time_zone: { type: "string", example: "Europe/Moscow", description: "Выбранный часовой пояс пользователя (IANA)" },
             schedule_config: { $ref: "#/components/schemas/ScheduleConfig" },
             overrides: {
               type: "object",
@@ -915,6 +926,7 @@ export function getOpenApiSpec(baseUrl = "http://localhost:5173") {
             username: { type: "string" },
             display_name: { type: "string" },
             avatar_color: { type: "string" },
+            time_zone: { type: "string", example: "Europe/Moscow", description: "IANA часовой пояс профиля пользователя" },
             schedule_config: { $ref: "#/components/schemas/ScheduleConfig" },
             overrides: {
               type: "object",

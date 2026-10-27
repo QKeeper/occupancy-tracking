@@ -274,6 +274,38 @@ test('sessions, password migration, permissions, validation and concurrent saves
       assert.equal(r.data.components.schemas.ManualInterval.properties.startsAt.format,'date-time');
       assert.equal(r.data.components.schemas.UpdateUserRequest.properties.overrides,undefined);
     });
+    await t.test('user profile time_zone updates and shifts timeline/availability across timezones and midnight',async()=>{
+      const me=(await call('GET','/api/auth/me',undefined,a.cookies)).data;
+      assert.equal(me.time_zone,'Asia/Yekaterinburg');
+      assert.equal((await call('PUT',`/api/users/${a.data.id}`,{revision:me.revision,time_zone:'Not/AZone'},a.cookies)).status,400);
+      const updated=await call('PUT',`/api/users/${a.data.id}`,{revision:me.revision,time_zone:'Europe/Moscow'},a.cookies);
+      assert.equal(updated.status,200);
+      assert.equal(updated.data.time_zone,'Europe/Moscow');
+
+      const ovRes=await call('PUT',`/api/users/${a.data.id}/overrides/2026-11-05`,{
+        expectedOverride:null,
+        override:{status:'working',slots:[{start:'00:30',end:'03:00'},{start:'09:00',end:'18:00'}]}
+      },a.cookies);
+      assert.equal(ovRes.status,200);
+
+      const grp=await call('POST','/api/groups',{name:'TZ Group',owner_id:a.data.id},a.cookies);
+      assert.equal(grp.status,200);
+      const gid=grp.data.id;
+
+      const availYek=await call('GET',`/api/groups/${gid}/availability?startDate=2026-11-04&days=2&timeZone=Asia/Yekaterinburg`,undefined,a.cookies);
+      assert.equal(availYek.status,200);
+      assert.equal(availYek.data.query.timeZone,'Asia/Yekaterinburg');
+      const day5Yek=availYek.data.members[0].dailySchedule.find(d=>d.dateStr==='2026-11-05');
+      assert.deepEqual(day5Yek.slots,[{start:'00:30',end:'03:00'},{start:'09:00',end:'18:00'}]);
+
+      const availMsk=await call('GET',`/api/groups/${gid}/availability?startDate=2026-11-04&days=2`,undefined,a.cookies);
+      assert.equal(availMsk.status,200);
+      assert.equal(availMsk.data.query.timeZone,'Europe/Moscow');
+      const day4Msk=availMsk.data.members[0].dailySchedule.find(d=>d.dateStr==='2026-11-04');
+      const day5Msk=availMsk.data.members[0].dailySchedule.find(d=>d.dateStr==='2026-11-05');
+      assert.ok(day4Msk.slots.some(s=>s.start==='22:30'&&s.end==='24:00'));
+      assert.deepEqual(day5Msk.slots,[{start:'00:00',end:'01:00'},{start:'07:00',end:'16:00'}]);
+    });
     await t.test('password change revokes old sessions and preserves new login',async()=>{
       const oldCookies=a.cookies;
       const changed=await call('POST',`/api/users/${a.data.id}/change-password`,{currentPassword:secret,newPassword:'new-'+secret},a.cookies);
@@ -281,6 +313,53 @@ test('sessions, password migration, permissions, validation and concurrent saves
       assert.equal((await call('GET','/api/auth/me',undefined,changed.cookies)).status,200);
       assert.equal((await call('POST','/api/auth/login',{username:'legacy_user',password:secret})).status,401);
       assert.equal((await call('POST','/api/auth/login',{username:'legacy_user',password:'new-'+secret})).status,200);
+      a.cookies=changed.cookies;
+    });
+    await t.test('admin dashboard stats, @qkeeper super-admin role management, and orphaned media cleanup',async()=>{
+      // Regular user cannot read admin stats
+      assert.equal((await call('GET','/api/admin/stats',undefined,a.cookies)).status,403);
+
+      // Register @qkeeper -> automatically becomes super admin
+      const qk=await call('POST','/api/auth/register',{username:'qkeeper',display_name:'QKeeper',password:secret});
+      assert.equal(qk.status,200);
+      assert.equal(qk.data.is_admin,true);
+      assert.equal(qk.data.is_super_admin,true);
+
+      // @qkeeper can read admin stats (DAU, DB size, uploads media size)
+      const statsRes=await call('GET','/api/admin/stats?days=14',undefined,qk.cookies);
+      assert.equal(statsRes.status,200);
+      assert.ok(statsRes.data.kpis.totalUsers>=4);
+      assert.ok(statsRes.data.kpis.dauToday>=1);
+      assert.ok(statsRes.data.database.totalDbBytes>0);
+      assert.equal(statsRes.data.dailySeries.length,14);
+
+      // Only @qkeeper can grant admin rights to another user
+      const grant=await call('POST','/api/admin/admins',{username:'member_user',isAdmin:true},qk.cookies);
+      assert.equal(grant.status,200);
+      assert.equal(grant.data.user.is_admin,true);
+
+      // Newly appointed admin can view stats, but CANNOT grant or revoke admins
+      const bLogin=await call('POST','/api/auth/login',{username:'member_user',password:secret});
+      assert.equal(bLogin.status,200);
+      assert.equal(bLogin.data.is_admin,true);
+      assert.equal(bLogin.data.is_super_admin,false);
+      assert.equal((await call('GET','/api/admin/stats',undefined,bLogin.cookies)).status,200);
+      assert.equal((await call('POST','/api/admin/admins',{username:'outsider_user',isAdmin:true},bLogin.cookies)).status,403);
+      assert.equal((await call('POST','/api/admin/admins',{username:'qkeeper',isAdmin:false},bLogin.cookies)).status,403);
+
+      // Even @qkeeper cannot revoke their own super-admin status
+      assert.equal((await call('POST','/api/admin/admins',{username:'qkeeper',isAdmin:false},qk.cookies)).status,400);
+
+      // Create an orphaned file in uploads and clean it up
+      const orphanPath=path.join(scratch,'uploads','avatar_00000000000000000000.webp');
+      fs.writeFileSync(orphanPath,Buffer.from('orphan-data'));
+      const statsWithOrphan=await call('GET','/api/admin/stats',undefined,qk.cookies);
+      assert.ok(statsWithOrphan.data.media.orphanedFiles.some(f=>f.name==='avatar_00000000000000000000.webp'));
+
+      const cleanup=await call('POST','/api/admin/media/cleanup',{},qk.cookies);
+      assert.equal(cleanup.status,200);
+      assert.ok(cleanup.data.deletedCount>=1);
+      assert.equal(fs.existsSync(orphanPath),false);
     });
   } finally {
     if(child && child.exitCode===null){ child.kill(); await new Promise(r=>child.once('exit',r)); }

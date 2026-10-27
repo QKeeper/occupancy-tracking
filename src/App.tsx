@@ -5,12 +5,18 @@ import { ScheduleProfileModal } from "@/components/ScheduleProfileModal";
 import { DayOverrideModal } from "@/components/DayOverrideModal";
 import { CreateGroupModal, GroupSettingsModal } from "@/components/GroupModals";
 import { AgentApiView } from "@/components/AgentApiView";
+import { AdminDashboardView } from "@/components/AdminDashboardView";
 import {
   AuthModal,
   ProfileCabinetModal,
   AVATAR_COLORS,
   SavedAccount,
 } from "@/components/AuthModal";
+import {
+  formatTimeZoneShort,
+  getNowInTimeZone,
+  DEFAULT_SCHEDULE_TIMEZONE,
+} from "@/lib/schedule-engine";
 import { loginSchema, registerSchema, extractZodErrors } from "@/lib/validators";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
@@ -35,6 +41,9 @@ import {
   X,
   User as UserIcon,
   Bot,
+  Globe,
+  ShieldCheck,
+  Crown,
 } from "lucide-react";
 
 const STORAGE_USER_ID_KEY = "syncro_active_user_id";
@@ -167,6 +176,11 @@ export function App() {
   };
 
   const [selectedMemberIds, setSelectedMemberIds] = useState<number[]>([]);
+  const [adminMode, setAdminMode] = useState<boolean>(() => {
+    const path = window.location.pathname.toLowerCase();
+    const params = new URLSearchParams(window.location.search);
+    return path === "/admin" || params.get("admin") === "1";
+  });
   const [agentMode, setAgentMode] = useState<boolean>(() => {
     const path = window.location.pathname.toLowerCase();
     const params = new URLSearchParams(window.location.search);
@@ -179,11 +193,30 @@ export function App() {
     );
   });
 
+  const toggleAdminMode = (next: boolean) => {
+    setAdminMode(next);
+    if (next) setAgentMode(false);
+    const url = new URL(window.location.href);
+    if (next) {
+      url.searchParams.set("admin", "1");
+      url.searchParams.delete("agent");
+      url.searchParams.delete("openapi");
+    } else {
+      url.searchParams.delete("admin");
+      if (url.pathname.toLowerCase() === "/admin") {
+        url.pathname = "/";
+      }
+    }
+    window.history.replaceState({}, "", url.toString());
+  };
+
   const toggleAgentMode = (next: boolean) => {
     setAgentMode(next);
+    if (next) setAdminMode(false);
     const url = new URL(window.location.href);
     if (next) {
       url.searchParams.set("agent", "1");
+      url.searchParams.delete("admin");
     } else {
       url.searchParams.delete("agent");
       url.searchParams.delete("openapi");
@@ -357,6 +390,10 @@ export function App() {
         avatar_url: m.avatar_url,
         banner_url: m.banner_url,
         timeline_style: m.timeline_style,
+        time_zone:
+          m.user_id === currentUser?.id
+            ? currentUser.time_zone || m.time_zone
+            : m.time_zone,
         schedule_config: m.schedule_config,
         overrides: m.overrides,
         revision: m.revision,
@@ -930,9 +967,11 @@ export function App() {
                 return (
                   <div key={grp.id} className="group/item flex items-center gap-0.5">
                     <Button
-                      variant={isAct ? "secondary" : "ghost"}
+                      variant={isAct && !adminMode && !agentMode ? "secondary" : "ghost"}
                       size="sm"
                       onClick={() => {
+                        if (adminMode) toggleAdminMode(false);
+                        if (agentMode) toggleAgentMode(false);
                         setActiveGroupId(grp.id);
                         localStorage.setItem(STORAGE_GROUP_ID_KEY, String(grp.id));
                         setSelectedMemberIds([]);
@@ -971,8 +1010,25 @@ export function App() {
           </div>
         </div>
 
-        {/* Нижний блок сайдбара: OpenAPI для агентов, Мой график и Личный кабинет пользователя */}
+        {/* Нижний блок сайдбара: Дэшборд администратора, OpenAPI для агентов, Мой график и Личный кабинет */}
         <div className="p-3 border-t border-border space-y-1.5">
+          {(currentUser.is_admin || currentUser.is_super_admin || currentUser.username.toLowerCase() === "qkeeper") && (
+            <Button
+              variant={adminMode ? "secondary" : "ghost"}
+              size="sm"
+              onClick={() => toggleAdminMode(!adminMode)}
+              data-testid="toggle-admin-view"
+              className="w-full justify-start text-xs font-medium"
+            >
+              {currentUser.is_super_admin || currentUser.username.toLowerCase() === "qkeeper" ? (
+                <Crown className="size-3.5 text-amber-500" />
+              ) : (
+                <ShieldCheck className="size-3.5 text-amber-500" />
+              )}
+              Админ-панель
+            </Button>
+          )}
+
           <Button
             variant={agentMode ? "secondary" : "ghost"}
             size="sm"
@@ -1072,7 +1128,13 @@ export function App() {
           </div>
         )}
 
-        {agentMode ? (
+        {adminMode && (currentUser.is_admin || currentUser.is_super_admin || currentUser.username.toLowerCase() === "qkeeper") ? (
+          <AdminDashboardView
+            currentUser={currentUser}
+            onCloseAdminView={() => toggleAdminMode(false)}
+            onRefreshGlobalData={() => fetchAllData(currentUser.id)}
+          />
+        ) : agentMode ? (
           <AgentApiView
             currentUser={currentUser}
             groups={groups}
@@ -1127,6 +1189,17 @@ export function App() {
               </div>
 
               <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setCabinetModalOpen(true)}
+                  data-testid="toolbar-timezone-btn"
+                  title="Часовой пояс таймлайна (нажмите, чтобы изменить в профиле)"
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors cursor-pointer"
+                >
+                  <Globe className="size-3.5 text-primary" />
+                  <span>{formatTimeZoneShort(currentUser.time_zone || DEFAULT_SCHEDULE_TIMEZONE)}</span>
+                </button>
+
                 <div className="inline-flex items-center rounded-lg border border-border bg-background p-0.5">
                   <Button
                     variant="ghost"
@@ -1142,7 +1215,10 @@ export function App() {
                     variant="ghost"
                     size="sm"
                     onClick={() => {
-                      setWeekStart(startOfWeek(new Date(), { weekStartsOn: 1 }));
+                      const nowTz = getNowInTimeZone(currentUser.time_zone || DEFAULT_SCHEDULE_TIMEZONE);
+                      const [y, m, d] = nowTz.dateStr.split("-").map(Number);
+                      const todayInTz = new Date(y, m - 1, d);
+                      setWeekStart(startOfWeek(todayInTz, { weekStartsOn: 1 }));
                       setScrollCommand((prev) => ({ type: "today", seq: prev.seq + 1 }));
                     }}
                     className="px-2.5 text-xs font-medium"

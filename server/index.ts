@@ -1,11 +1,12 @@
 import express from "express";
-import { migrateManualOverrides } from "./manual-overrides";
+import { migrateManualOverrides, getScheduleTimeZone } from "./manual-overrides";
 import { USER_COLUMNS } from "./user-routes";
 import { createPatternMedia } from "./pattern-media";
 import { initAuth, installAuth, issueSession, hashPassword, verifyPassword } from "./auth";
 import { installUserRoutes } from "./user-routes";
 import { installGroupRoutes, HttpError } from "./group-routes";
-import { usernameSchema, passwordSchema } from "./validation";
+import { initAdmin, installAdminRoutes, isSuperAdminUsername, recordUserActivity } from "./admin-routes";
+import { usernameSchema, passwordSchema, timeZoneSchema } from "./validation";
 import dotenv from "dotenv";
 import pg from "pg";
 import { z } from "zod";
@@ -123,6 +124,7 @@ async function initDb() {
       ALTER TABLE users ADD COLUMN IF NOT EXISTS banner_url TEXT DEFAULT NULL;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS timeline_style JSONB NOT NULL DEFAULT '{"bgColor":"#e11d48","patternColor":"#fda4af","patternType":"stripes","symbol":"⚡"}'::jsonb;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS member_orders JSONB NOT NULL DEFAULT '{}'::jsonb;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS time_zone TEXT NOT NULL DEFAULT 'Asia/Yekaterinburg';
 
       CREATE TABLE IF NOT EXISTS groups (
         id SERIAL PRIMARY KEY,
@@ -148,6 +150,7 @@ async function initDb() {
 
     await initAuth(client);
     await migrateManualOverrides(client);
+    await initAdmin(client);
     await patternMedia.migrate(client);
 
     // Automatically migrate any legacy base64 avatar_url / banner_url stored in DB into static /uploads files
@@ -184,6 +187,7 @@ function broadcastUpdate(eventType: string, payload?: any) {
   }
 }
 
+installAdminRoutes(app, pool, uploadsDir, broadcastUpdate);
 installUserRoutes(app, pool, broadcastUpdate, saveDataUrlAsImageFile, patternMedia.normalizeStyle);
 patternMedia.install(app);
 installGroupRoutes(app, pool, broadcastUpdate);
@@ -286,9 +290,9 @@ app.post("/api/upload", async (req, res, next) => {
                 .toBuffer();
             }
           } else {
-            // Static image (or single-frame GIF)
-            const targetW = safeKind === "avatar" ? 256 : 880;
-            const targetH = safeKind === "avatar" ? 256 : 200;
+            // Static image (or single-frame GIF) — banner uses unified 18:5 (3.6:1) aspect ratio
+            const targetW = safeKind === "avatar" ? 256 : 864;
+            const targetH = safeKind === "avatar" ? 256 : 240;
             ext = "webp";
             outBuffer = await sharp(inputBuffer)
               .extract({ left: cx, top: cy, width: cw, height: ch })
@@ -320,7 +324,7 @@ app.get("/api/users/:id", async (req, res) => {
   try {
     const userId = parseInt(req.params.id, 10);
     const { rows } = await pool.query(
-      "SELECT id, username, display_name, avatar_color, avatar_url, banner_url, timeline_style, member_orders, schedule_config, overrides, revision, created_at FROM user_profiles WHERE id = $1",
+      `SELECT ${USER_COLUMNS} FROM user_profiles WHERE id = $1`,
       [userId]
     );
     if (rows.length === 0) return res.status(404).json({ error: "Не найден" });
@@ -340,6 +344,7 @@ const serverRegisterSchema = z.object({
   display_name: z.string().trim().min(1, "Введите имя").max(64, "Имя слишком длинное"),
   password: passwordSchema,
   avatar_color: z.string().optional(),
+  time_zone: timeZoneSchema.optional(),
 });
 
 const serverChangePasswordSchema = z.object({
@@ -357,7 +362,7 @@ app.post("/api/auth/login", async (req, res) => {
     const { username, password } = parsed.data;
     const cleanUsername = username.toLowerCase().replace(/^@/, "");
     const { rows } = await pool.query(
-      "SELECT id, username, display_name, password, avatar_color, avatar_url, banner_url, timeline_style, member_orders, schedule_config, overrides, revision FROM user_profiles WHERE LOWER(username) = $1",
+      "SELECT id, username, display_name, password, avatar_color, avatar_url, banner_url, timeline_style, member_orders, schedule_config, overrides, revision, time_zone, is_admin, is_super_admin FROM user_profiles WHERE LOWER(username) = $1",
       [cleanUsername]
     );
     if (rows.length === 0) {
@@ -369,6 +374,7 @@ app.post("/api/auth/login", async (req, res) => {
     }
     const { password: _removed, ...safeUser } = userRow;
     await issueSession(pool, req, res, userRow.id, userRow.password);
+    recordUserActivity(pool, userRow.id);
     res.json(safeUser);
   } catch (err: any) {
     res.status(err.status || 500).json({ error: err.status ? err.message : "Ошибка входа" });
@@ -382,8 +388,9 @@ app.post("/api/auth/register", async (req, res) => {
     if (!parsed.success) {
       return res.status(400).json({ error: parsed.error.issues[0]?.message || "Ошибка валидации" });
     }
-    const { username, display_name, password, avatar_color } = parsed.data;
+    const { username, display_name, password, avatar_color, time_zone } = parsed.data;
     const cleanUsername = username.toLowerCase().replace(/^@/, "");
+    const userTimeZone = time_zone || getScheduleTimeZone();
     const defaultSchedule: ScheduleConfig = {
       mode: "fixed_weekly",
       weekly: {
@@ -404,8 +411,8 @@ app.post("/api/auth/register", async (req, res) => {
     };
 
     const { rows } = await pool.query(
-      `INSERT INTO users (username, display_name, password, avatar_color, schedule_config)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO users (username, display_name, password, avatar_color, schedule_config, time_zone, is_admin)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING id`,
       [
         cleanUsername,
@@ -413,9 +420,12 @@ app.post("/api/auth/register", async (req, res) => {
         await hashPassword(password),
         avatar_color || "#3B82F6",
         JSON.stringify(defaultSchedule),
+        userTimeZone,
+        isSuperAdminUsername(cleanUsername),
       ]
     );
     await issueSession(pool, req, res, rows[0].id);
+    recordUserActivity(pool, rows[0].id);
     const profile = await pool.query(`SELECT ${USER_COLUMNS} FROM user_profiles WHERE id=$1`, [rows[0].id]);
     res.json(profile.rows[0]);
     broadcastUpdate("user_registered", { id: rows[0].id });
@@ -496,7 +506,7 @@ app.get("/api/groups", async (req, res) => {
       `SELECT gm.group_id, gm.user_id, gm.status, gm.invited_by, gm.joined_at,
               u.username, u.display_name, u.avatar_color, u.avatar_url, u.banner_url,
               (u.timeline_style - 'iconHistory') AS timeline_style,
-              u.schedule_config, u.overrides, u.revision,
+              u.schedule_config, u.overrides, u.revision, u.time_zone,
               inv.display_name as invited_by_name, inv.username as invited_by_username
        FROM group_members gm
        JOIN user_profiles u ON gm.user_id = u.id
@@ -549,13 +559,13 @@ app.get("/api/users", async (req, res) => {
     const rawUname = req.query.username ? String(req.query.username).trim().toLowerCase().replace(/^@/, "") : "";
     if (rawUname) {
       const { rows } = await pool.query(
-        "SELECT id, username, display_name, avatar_color, avatar_url, schedule_config, overrides, revision, created_at FROM user_profiles WHERE LOWER(username) LIKE $1 ORDER BY id ASC",
+        "SELECT id, username, display_name, avatar_color, avatar_url, schedule_config, overrides, revision, created_at, time_zone FROM user_profiles WHERE LOWER(username) LIKE $1 ORDER BY id ASC",
         [`%${rawUname}%`]
       );
       return res.json(rows);
     }
     const { rows } = await pool.query(
-      "SELECT id, username, display_name, avatar_color, avatar_url, schedule_config, overrides, revision, created_at FROM user_profiles ORDER BY id ASC"
+      "SELECT id, username, display_name, avatar_color, avatar_url, schedule_config, overrides, revision, created_at, time_zone FROM user_profiles ORDER BY id ASC"
     );
     res.json(rows);
   } catch (err: any) {
@@ -577,13 +587,19 @@ app.get("/api/groups/:groupId/availability", async (req, res) => {
 
     const { rows: memberRows } = await pool.query(
       `SELECT u.id, u.username, u.display_name, u.avatar_color, u.avatar_url,
-              u.schedule_config, u.overrides
+              u.schedule_config, u.overrides, u.time_zone
        FROM group_members gm
        JOIN user_profiles u ON gm.user_id = u.id
        WHERE gm.group_id = $1 AND gm.status = 'accepted'
        ORDER BY gm.joined_at ASC`,
       [groupId]
     );
+
+    const requesterRow = memberRows.find((m) => m.id === res.locals.userId);
+    const requestedTz = req.query.timeZone ? String(req.query.timeZone).trim() : "";
+    const viewerTimeZone = requestedTz
+      ? timeZoneSchema.parse(requestedTz)
+      : requesterRow?.time_zone || getScheduleTimeZone();
 
     const rawStartDate = req.query.startDate ? String(req.query.startDate).trim() : format(new Date(), "yyyy-MM-dd");
     const parsedStart = parseISO(rawStartDate);
@@ -617,18 +633,20 @@ app.get("/api/groups/:groupId/availability", async (req, res) => {
       id: m.id,
       username: m.username,
       display_name: m.display_name,
+      time_zone: m.time_zone,
       schedule_mode: m.schedule_config?.mode || "fixed_weekly",
-      dailySchedule: days.map((d) => getUserDaySchedule(m as any, d)),
+      dailySchedule: days.map((d) => getUserDaySchedule(m as any, d, viewerTimeZone)),
     }));
 
     const dailyOverlap = days.map((d) =>
-      computeCombinationOverlap(activeMembers as any, d, windowStart, windowEnd, minCommonHours)
+      computeCombinationOverlap(activeMembers as any, d, windowStart, windowEnd, minCommonHours, viewerTimeZone)
     );
 
     const continuousFreeWindows = computeContinuousFreeOverlap(
       activeMembers as any,
       days,
-      Math.round(minCommonHours * 60)
+      Math.round(minCommonHours * 60),
+      viewerTimeZone
     );
 
     res.json({
@@ -644,6 +662,7 @@ app.get("/api/groups/:groupId/availability", async (req, res) => {
         windowStart,
         windowEnd,
         minCommonHours,
+        timeZone: viewerTimeZone,
         selectedMemberIds: activeMembers.map((m) => m.id),
       },
       members: membersWithSchedules,

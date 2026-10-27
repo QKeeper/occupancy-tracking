@@ -18,6 +18,7 @@ export interface ShiftCycleConfig {
 
 export interface ScheduleConfig {
   mode: "fixed_weekly" | "shift_cycle" | "manual";
+  timeZone?: string;
   weekly?: {
     [dayOfWeek: string]: DayWeeklySchedule; // "0" (Sun) to "6" (Sat)
   };
@@ -28,6 +29,7 @@ export interface DayOverride {
   status: "working" | "free" | "partial";
   slots: TimeSlot[];
   note?: string;
+  timeZone?: string;
 }
 
 export interface OverrideMap {
@@ -53,9 +55,12 @@ export interface User {
   banner_url?: string | null;
   timeline_style?: TimelineStyleConfig;
   member_orders?: Record<string, number[]>;
+  time_zone?: string;
   schedule_config: ScheduleConfig;
   overrides: OverrideMap;
   created_at?: string;
+  is_admin?: boolean;
+  is_super_admin?: boolean;
 }
 
 export interface GroupMember extends User {

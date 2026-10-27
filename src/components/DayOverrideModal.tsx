@@ -1,6 +1,11 @@
 import React, { useState, useEffect } from "react";
 import { User, DayOverride, TimeSlot } from "@/types";
-import { getUserDaySchedule } from "@/lib/schedule-engine";
+import {
+  DEFAULT_SCHEDULE_TIMEZONE,
+  formatTimeZoneShort,
+  getUserDaySchedule,
+  normalizeTimeZone,
+} from "@/lib/schedule-engine";
 import {
   Dialog,
   DialogContent,
@@ -41,7 +46,8 @@ export const DayOverrideModal: React.FC<DayOverrideModalProps> = ({
 
   useEffect(() => {
     if (open && user && date) {
-      const computed = getUserDaySchedule(user, date);
+      const viewerTz = normalizeTimeZone(user.time_zone || DEFAULT_SCHEDULE_TIMEZONE);
+      const computed = getUserDaySchedule(user, date, viewerTz);
       setExpectedOverride(user.overrides?.[format(date, "yyyy-MM-dd")] ?? null);
       setStatus(computed.status);
       setSlots(
@@ -51,10 +57,11 @@ export const DayOverrideModal: React.FC<DayOverrideModalProps> = ({
       );
       setNote(computed.note || "");
     }
-  }, [open, user?.id, date?.getTime()]);
+  }, [open, user?.id, user?.time_zone, date?.getTime()]);
 
   if (!user || !date) return null;
 
+  const viewerTz = normalizeTimeZone(user.time_zone || DEFAULT_SCHEDULE_TIMEZONE);
   const dateStr = format(date, "yyyy-MM-dd");
   const formattedDate = format(date, "EEEE, d MMMM", { locale: ru });
   const hasExistingOverride = Boolean(user.overrides?.[dateStr]);
@@ -63,11 +70,17 @@ export const DayOverrideModal: React.FC<DayOverrideModalProps> = ({
     setSaving(true);
     try {
       const finalSlots = status === "free" ? [] : slots;
-      await onSaveOverride(user.id, dateStr, {
-        status,
-        slots: finalSlots,
-        note: note.trim() || undefined,
-      }, expectedOverride);
+      await onSaveOverride(
+        user.id,
+        dateStr,
+        {
+          status,
+          slots: finalSlots,
+          note: note.trim() || undefined,
+          ...(viewerTz !== DEFAULT_SCHEDULE_TIMEZONE ? { timeZone: viewerTz } : {}),
+        },
+        expectedOverride
+      );
       toast.success("Сохранено");
       onOpenChange(false);
     } catch (e: any) {
@@ -95,7 +108,9 @@ export const DayOverrideModal: React.FC<DayOverrideModalProps> = ({
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle>{user.display_name.replace(" (Вы)", "")}</DialogTitle>
-          <DialogDescription className="capitalize">{formattedDate}</DialogDescription>
+          <DialogDescription className="capitalize">
+            {formattedDate} • {formatTimeZoneShort(viewerTz)}
+          </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4 py-2">

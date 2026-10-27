@@ -8,9 +8,12 @@ import React, {
 } from "react";
 import { User } from "@/types";
 import {
+  DEFAULT_SCHEDULE_TIMEZONE,
   computeContinuousFreeOverlap,
   computeUserContinuousBusyBlocks,
+  getNowInTimeZone,
   layoutBusyBlocks,
+  normalizeTimeZone,
 } from "@/lib/schedule-engine";
 import { getTimelineBlockStyle } from "@/lib/timeline-pattern";
 import {
@@ -19,7 +22,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { format, isToday, isWeekend } from "date-fns";
+import { format, isWeekend } from "date-fns";
 import { ru } from "date-fns/locale/ru";
 import { Check, ZoomIn, ZoomOut } from "lucide-react";
 
@@ -44,7 +47,8 @@ interface OccupancyCalendarGridProps {
 const HOURS_24 = Array.from({ length: 24 }, (_, i) => i);
 const MIN_HOUR_WIDTH = 12;
 const MAX_HOUR_WIDTH = 64;
-const MEMBER_ROW_HEIGHT = 44;
+const MEMBER_COLUMN_WIDTH = 198;
+const MEMBER_ROW_HEIGHT = 55;
 const STORAGE_HOUR_WIDTH_KEY = "syncro_timeline_hour_width";
 const STORAGE_DAY_OFFSET_KEY = "syncro_timeline_day_offset";
 
@@ -132,6 +136,10 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
     }
   }, []);
 
+  const viewerTimeZone = normalizeTimeZone(
+    currentUser.time_zone || DEFAULT_SCHEDULE_TIMEZONE
+  );
+
   const selectedUsers = useMemo(
     () => members.filter((m) => selectedMemberIds.includes(m.id)),
     [members, selectedMemberIds]
@@ -139,18 +147,20 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
 
   // Continuous common free windows across the entire multi-day timeline
   const continuousFreeWindows = useMemo(
-    () => computeContinuousFreeOverlap(selectedUsers, days, 60),
-    [selectedUsers, days]
+    () => computeContinuousFreeOverlap(selectedUsers, days, 60, viewerTimeZone),
+    [selectedUsers, days, viewerTimeZone]
   );
 
   // Precompute busy blocks for each member
   const busyBlocksByMember = useMemo(() => {
     const map: Record<number, ReturnType<typeof layoutBusyBlocks>> = {};
     for (const m of members) {
-      map[m.id] = layoutBusyBlocks(computeUserContinuousBusyBlocks(m, days));
+      map[m.id] = layoutBusyBlocks(
+        computeUserContinuousBusyBlocks(m, days, viewerTimeZone)
+      );
     }
     return map;
-  }, [members, days]);
+  }, [members, days, viewerTimeZone]);
 
   // Generate each member's pattern once, rather than once per busy block/render.
   const blockStylesByMember = useMemo(() => {
@@ -169,9 +179,12 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
 
   const minToPx = (mins: number) => (mins / 60) * hourWidth;
 
-  const now = new Date();
-  const nowMins = now.getHours() * 60 + now.getMinutes();
-  const nowOffsetPx = minToPx(nowMins);
+  const nowInTz = getNowInTimeZone(viewerTimeZone);
+  const nowOffsetPx = minToPx(nowInTz.totalMinutes);
+  const isDayToday = useCallback(
+    (d: Date) => format(d, "yyyy-MM-dd") === nowInTz.dateStr,
+    [nowInTz.dateStr]
+  );
 
   const hourStep = hourWidth < 24 ? 4 : hourWidth < 34 ? 2 : 1;
 
@@ -514,7 +527,7 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
       if (scrollCommand?.type === "preserve-day" && scrollCommand.targetDayOffset !== undefined) {
         scroller.scrollLeft = scrollCommand.targetDayOffset * dayWidth;
       } else if (scrollCommand?.type === "today") {
-        const todayIdx = days.findIndex((d) => isToday(d));
+        const todayIdx = days.findIndex((d) => isDayToday(d));
         if (todayIdx !== -1) {
           scroller.scrollLeft = todayIdx * dayWidth;
         } else {
@@ -571,7 +584,10 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
         {/* ДВУХКОЛОНОЧНЫЙ МАКЕТ: Слева фиксированные участники, справа изолированный скролл таймлайна */}
         <div className="flex">
           {/* ЛЕВАЯ КОЛОНКА: Участники (таймлайн сюда физически не заходит) */}
-          <div className="w-[220px] min-w-[220px] shrink-0 border-r border-border bg-card flex flex-col z-20">
+          <div
+            style={{ width: `${MEMBER_COLUMN_WIDTH}px`, minWidth: `${MEMBER_COLUMN_WIDTH}px` }}
+            className="shrink-0 border-r border-border bg-card flex flex-col z-20"
+          >
             {/* Шапка левой колонки (высота h-[52px] совпадает с шапкой таймлайна) */}
             <div className="h-[52px] border-b border-border bg-card px-3 flex items-center justify-between gap-2 shrink-0">
               <button
@@ -624,8 +640,11 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
                       }
                       onToggleMemberFilter(member.id);
                     }}
-                    style={getRowDragStyle(memberIdx)}
-                    className={`relative h-11 border-b border-border last:border-b-0 px-3 flex items-center justify-between gap-2 shrink-0 overflow-hidden ${
+                    style={{
+                      height: `${MEMBER_ROW_HEIGHT}px`,
+                      ...getRowDragStyle(memberIdx),
+                    }}
+                    className={`relative border-b border-border last:border-b-0 px-3 flex items-center justify-between gap-2 shrink-0 overflow-hidden ${
                       memberDragState
                         ? isBeingDragged
                           ? "cursor-grabbing shadow-lg ring-1 ring-primary/60"
@@ -725,7 +744,7 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
               <div className="flex h-[52px] border-b border-border bg-muted/30 shrink-0">
                 {days.map((day) => {
                   const dateStr = format(day, "yyyy-MM-dd");
-                  const today = isToday(day);
+                  const today = isDayToday(day);
                   const weekend = isWeekend(day);
 
                   return (
@@ -797,10 +816,11 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
                   return (
                     <div
                       key={member.id}
-                      className={`relative h-11 border-b border-border/40 last:border-b-0 bg-background/40 transition-opacity duration-150 ${
+                      className={`relative border-b border-border/40 last:border-b-0 bg-background/40 transition-opacity duration-150 ${
                         isDimmed ? "opacity-35" : "opacity-100"
                       } ${isBeingDragged ? "bg-background/90 shadow-md" : ""}`}
                       style={{
+                        height: `${MEMBER_ROW_HEIGHT}px`,
                         width: `${totalTimelineWidth}px`,
                         minWidth: `${totalTimelineWidth}px`,
                         ...getRowDragStyle(memberIdx),
@@ -810,7 +830,7 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
                       <div className="absolute inset-0 flex">
                         {days.map((day) => {
                           const dateStr = format(day, "yyyy-MM-dd");
-                          const today = isToday(day);
+                          const today = isDayToday(day);
                           return (
                             <div
                               key={dateStr}
@@ -885,7 +905,7 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
                               <div
                                 onClick={() => {
                                   if (isMe && !hasDraggedRef.current) {
-                                    onCellClick(member, blockDay);
+                                    onCellClick(member, block.sourceDate || blockDay);
                                   }
                                 }}
                                 style={{
@@ -951,7 +971,10 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
         {/* НИЖНЯЯ ПАНЕЛЬ: УПРАВЛЕНИЕ МАСШТАБОМ ТАЙМЛАЙНА + МИНИКАРТА КАК В VSCODE */}
         <div className="border-t border-border bg-card flex items-stretch h-12">
           {/* Слева под колонкой участников: ползунок и кнопки масштаба таймлайна */}
-          <div className="w-[220px] min-w-[220px] border-r border-border px-3 flex items-center justify-between gap-2 shrink-0 bg-card">
+          <div
+            style={{ width: `${MEMBER_COLUMN_WIDTH}px`, minWidth: `${MEMBER_COLUMN_WIDTH}px` }}
+            className="border-r border-border px-3 flex items-center justify-between gap-2 shrink-0 bg-card"
+          >
             <span className="text-[11px] font-medium text-muted-foreground shrink-0">
               Масштаб
             </span>

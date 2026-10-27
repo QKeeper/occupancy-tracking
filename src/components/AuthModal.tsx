@@ -28,9 +28,17 @@ import {
   getTimelineBlockStyle,
 } from "@/lib/timeline-pattern";
 import {
+  DEFAULT_SCHEDULE_TIMEZONE,
+  formatTimeZoneOptionLabel,
+  getAvailableTimeZoneOptions,
+  isValidTimeZone,
+  normalizeTimeZone,
+} from "@/lib/schedule-engine";
+import {
   ArrowRightLeft,
   Camera,
   Check,
+  Globe,
   ImagePlus,
   KeyRound,
   LogOut,
@@ -152,6 +160,9 @@ export const ProfileCabinetModal: React.FC<ProfileCabinetModalProps> = ({
   const [avatarColor, setAvatarColor] = useState(currentUser.avatar_color || "#3B82F6");
   const [avatarUrl, setAvatarUrl] = useState<string | null>(currentUser.avatar_url || null);
   const [bannerUrl, setBannerUrl] = useState<string | null>(currentUser.banner_url || null);
+  const [timeZone, setTimeZone] = useState<string>(
+    normalizeTimeZone(currentUser.time_zone || DEFAULT_SCHEDULE_TIMEZONE)
+  );
   const [timelineStyle, setTimelineStyle] = useState<TimelineStyleConfig>({
     ...DEFAULT_TIMELINE_STYLE,
     ...(currentUser.timeline_style || {}),
@@ -190,6 +201,7 @@ export const ProfileCabinetModal: React.FC<ProfileCabinetModalProps> = ({
       setAvatarColor(currentUser.avatar_color || "#3B82F6");
       setAvatarUrl(currentUser.avatar_url || null);
       setBannerUrl(currentUser.banner_url || null);
+      setTimeZone(normalizeTimeZone(currentUser.time_zone || DEFAULT_SCHEDULE_TIMEZONE));
       setTimelineStyle({
         ...DEFAULT_TIMELINE_STYLE,
         ...(currentUser.timeline_style || {}),
@@ -308,6 +320,7 @@ export const ProfileCabinetModal: React.FC<ProfileCabinetModalProps> = ({
       display_name: displayName,
       username,
       avatar_color: avatarColor,
+      time_zone: timeZone,
     });
 
     if (!parsed.success) {
@@ -335,6 +348,7 @@ export const ProfileCabinetModal: React.FC<ProfileCabinetModalProps> = ({
       await onUpdateProfile({
         revision: editRevision,
         ...parsed.data,
+        time_zone: normalizeTimeZone(timeZone),
         avatar_url: avatarUrl,
         banner_url: bannerUrl,
         timeline_style: finalTimelineStyle,
@@ -747,10 +761,10 @@ export const ProfileCabinetModal: React.FC<ProfileCabinetModalProps> = ({
                     </div>
 
                     <div className="rounded-xl border border-border bg-card overflow-hidden shadow-md">
-                      {/* Баннер (поддерживает PNG и анимированные GIF) */}
+                      {/* Баннер (поддерживает PNG и анимированные GIF, единое соотношение сторон 18:5 / 3.6:1) */}
                       <div
                         onClick={() => bannerInputRef.current?.click()}
-                        className="group/banner relative h-28 w-full cursor-pointer overflow-hidden"
+                        className="group/banner relative aspect-[18/5] w-full cursor-pointer overflow-hidden"
                         style={{
                           backgroundColor: bannerUrl ? undefined : avatarColor,
                           backgroundImage: bannerUrl ? `url("${bannerUrl}")` : undefined,
@@ -886,6 +900,49 @@ export const ProfileCabinetModal: React.FC<ProfileCabinetModalProps> = ({
                                 {errors.username}
                               </p>
                             )}
+                          </div>
+
+                          <div className="border-t border-border/50 pt-2">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground inline-flex items-center gap-1">
+                                <Globe className="size-3" />
+                                Часовой пояс
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  try {
+                                    const detected =
+                                      Intl.DateTimeFormat().resolvedOptions().timeZone;
+                                    if (detected && isValidTimeZone(detected)) {
+                                      setTimeZone(detected);
+                                      toast.info(`Выбран пояс браузера: ${detected}`);
+                                    }
+                                  } catch {
+                                    // ignore
+                                  }
+                                }}
+                                className="text-[10px] text-muted-foreground hover:text-foreground cursor-pointer"
+                              >
+                                определить авто
+                              </button>
+                            </div>
+                            <select
+                              id="profile-timezone-select"
+                              data-testid="profile-timezone-select"
+                              value={timeZone}
+                              onChange={(e) => setTimeZone(e.target.value)}
+                              className="w-full mt-1 h-8 rounded-md border border-border bg-background px-2 text-xs text-foreground outline-none focus:ring-2 focus:ring-ring/50 cursor-pointer"
+                            >
+                              {getAvailableTimeZoneOptions(timeZone).map((opt) => (
+                                <option key={opt.value} value={opt.value}>
+                                  {formatTimeZoneOptionLabel(opt)}
+                                </option>
+                              ))}
+                            </select>
+                            <p className="text-[11px] text-muted-foreground mt-1">
+                              Все даты и интервалы на таймлайнах пересчитываются в выбранный часовой пояс
+                            </p>
                           </div>
                         </div>
                       </div>

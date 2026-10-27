@@ -1,10 +1,17 @@
 import React, { useState } from "react";
 import { User, ScheduleConfig, TimeSlot, DayWeeklySchedule } from "@/types";
 import {
+  DEFAULT_SCHEDULE_TIMEZONE,
+  convertScheduleConfigTimeZone,
+  formatTimeZoneShort,
+  normalizeTimeZone,
+} from "@/lib/schedule-engine";
+import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -59,22 +66,26 @@ export const ScheduleProfileModal: React.FC<ScheduleProfileModalProps> = ({
     slots: [{ start: "09:00", end: "21:00" }],
   };
 
-  const [config, setConfig] = useState<ScheduleConfig>(() => ({
-    mode: user.schedule_config?.mode || "fixed_weekly",
-    weekly: { ...defaultWeekly, ...(user.schedule_config?.weekly || {}) },
-    shift: { ...defaultShift, ...(user.schedule_config?.shift || {}) },
-  }));
+  const userTz = normalizeTimeZone(user.time_zone || DEFAULT_SCHEDULE_TIMEZONE);
+
+  const buildInitialConfig = (): ScheduleConfig => {
+    const base: ScheduleConfig = {
+      mode: user.schedule_config?.mode || "fixed_weekly",
+      timeZone: user.schedule_config?.timeZone || DEFAULT_SCHEDULE_TIMEZONE,
+      weekly: { ...defaultWeekly, ...(user.schedule_config?.weekly || {}) },
+      shift: { ...defaultShift, ...(user.schedule_config?.shift || {}) },
+    };
+    return convertScheduleConfigTimeZone(base, userTz);
+  };
+
+  const [config, setConfig] = useState<ScheduleConfig>(buildInitialConfig);
 
   React.useEffect(() => {
     if (open) {
       setEditRevision(user.revision);
-      setConfig({
-        mode: user.schedule_config?.mode || "fixed_weekly",
-        weekly: { ...defaultWeekly, ...(user.schedule_config?.weekly || {}) },
-        shift: { ...defaultShift, ...(user.schedule_config?.shift || {}) },
-      });
+      setConfig(buildInitialConfig());
     }
-  }, [open, user.id]);
+  }, [open, user.id, user.time_zone, user.revision]);
 
   const handleToggleWeeklyDay = (dayKey: string, checked: boolean) => {
     setConfig((prev) => {
@@ -146,9 +157,15 @@ export const ScheduleProfileModal: React.FC<ScheduleProfileModalProps> = ({
   const handleSave = async () => {
     setSaving(true);
     try {
+      const nextConfig: ScheduleConfig = {
+        ...config,
+        ...(userTz !== DEFAULT_SCHEDULE_TIMEZONE || config.timeZone
+          ? { timeZone: userTz }
+          : {}),
+      };
       await onSaveUser({
         revision: editRevision,
-        schedule_config: config,
+        schedule_config: nextConfig,
       });
       toast.success("График сохранён");
       onOpenChange(false);
@@ -164,6 +181,9 @@ export const ScheduleProfileModal: React.FC<ScheduleProfileModalProps> = ({
       <DialogContent className="max-w-xl">
         <DialogHeader>
           <DialogTitle>Мой график работы (@{user.username})</DialogTitle>
+          <DialogDescription className="text-xs">
+            Часовой пояс: {formatTimeZoneShort(userTz)} ({userTz})
+          </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4 py-1">

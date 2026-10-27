@@ -1,6 +1,10 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { User, Group, DayOverride, ScheduleConfig, TimeSlot } from "@/types";
-import { getUserDaySchedule, computeCombinationOverlap } from "@/lib/schedule-engine";
+import {
+  getUserDaySchedule,
+  computeCombinationOverlap,
+  DEFAULT_SCHEDULE_TIMEZONE,
+} from "@/lib/schedule-engine";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -150,10 +154,11 @@ export function AgentApiView({
 
   // Precomputed compact summary of current group's schedule & common free windows for LLM reading
   const agentScheduleSnapshot = useMemo(() => {
+    const viewerTz = currentUser?.time_zone || DEFAULT_SCHEDULE_TIMEZONE;
     const daySummaries = days.map((d) => {
-      const overlap = computeCombinationOverlap(groupMembers, d, "09:00", "23:00", 2);
+      const overlap = computeCombinationOverlap(groupMembers, d, "09:00", "23:00", 2, viewerTz);
       const memberStatuses = groupMembers.map((m) => {
-        const s = getUserDaySchedule(m, d);
+        const s = getUserDaySchedule(m, d, viewerTz);
         return {
           userId: m.id,
           username: `@${m.username}`,
@@ -182,6 +187,7 @@ export function AgentApiView({
             id: currentUser.id,
             username: `@${currentUser.username}`,
             displayName: currentUser.display_name,
+            timeZone: viewerTz,
             scheduleMode: currentUser.schedule_config?.mode,
           }
         : null,

@@ -32,9 +32,9 @@ export const ImageCropperModal: React.FC<ImageCropperModalProps> = ({
   kind,
   onConfirmCrop,
 }) => {
-  // Crop box dimensions in px
-  const cropBoxWidth = kind === "avatar" ? 220 : 440;
-  const cropBoxHeight = kind === "avatar" ? 220 : 100;
+  // Crop box dimensions in px (banner uses unified 18:5 / 3.6:1 aspect ratio)
+  const cropBoxWidth = kind === "avatar" ? 220 : 432;
+  const cropBoxHeight = kind === "avatar" ? 220 : 120;
 
   const [naturalSize, setNaturalSize] = useState<{ w: number; h: number }>({
     w: cropBoxWidth,
