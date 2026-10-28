@@ -191,6 +191,10 @@ installUserRoutes(app, pool, broadcastUpdate, saveDataUrlAsImageFile, patternMed
 patternMedia.install(app);
 installGroupRoutes(app, pool, broadcastUpdate);
 
+app.get("/api/health", (_req, res) => {
+  res.json({ status: "ok", timestamp: new Date().toISOString() });
+});
+
 app.get("/api/events", (req, res) => {
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
@@ -672,6 +676,23 @@ app.get("/api/groups/:groupId/availability", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// In production, serve the built SPA from /dist if it exists
+const distDir = path.resolve(process.cwd(), "dist");
+if (fs.existsSync(distDir)) {
+  app.use(express.static(distDir));
+  app.get("*", (req, res, next) => {
+    if (
+      req.path.startsWith("/api") ||
+      req.path.startsWith("/uploads") ||
+      req.path === "/openapi.json" ||
+      req.path === "/llms.txt"
+    ) {
+      return next();
+    }
+    res.sendFile(path.join(distDir, "index.html"));
+  });
+}
 
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   if (err instanceof z.ZodError) return res.status(400).json({ error: err.issues[0]?.message || "Некорректные данные", issues: err.issues });

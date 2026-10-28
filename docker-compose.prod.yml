@@ -1,0 +1,24 @@
+services:
+  occupancy-tracking:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: occupancy-tracking
+    restart: always
+    ports:
+      # Exposes port 3001 locally on the host for Nginx / reverse proxy
+      - "${HOST_BIND_IP:-127.0.0.1}:${PORT:-3001}:3001"
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      # Connects to existing PostgreSQL on the host machine without conflicts
+      - DATABASE_URL=${DATABASE_URL}
+      - APP_ORIGINS=${APP_ORIGINS:-http://localhost,https://yourdomain.com}
+      - COOKIE_SECURE=${COOKIE_SECURE:-true}
+      - SCHEDULE_TIMEZONE=${SCHEDULE_TIMEZONE:-Asia/Yekaterinburg}
+    volumes:
+      # Persistent storage for avatars, banners and pattern media
+      - ./uploads:/app/uploads
+    extra_hosts:
+      # Allows the container to access PostgreSQL running directly on the host
+      - "host.docker.internal:host-gateway"
