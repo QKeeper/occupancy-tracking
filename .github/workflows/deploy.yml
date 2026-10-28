@@ -16,6 +16,21 @@ jobs:
     name: Run Tests & Build
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: occupancy_tracking
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -35,6 +50,8 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Run security and integration tests
+        env:
+          DATABASE_URL: postgresql://postgres:password@127.0.0.1:5432/occupancy_tracking
         run: pnpm test
 
       - name: Build client application
@@ -43,11 +60,22 @@ jobs:
   deploy:
     name: Deploy to Remote Server
     needs: test-and-build
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref_name == 'main'
     runs-on: ubuntu-latest
 
     steps:
+      - name: Check SSH configuration
+        id: check_ssh
+        run: |
+          if [ -z "${{ secrets.SSH_HOST }}" ]; then
+            echo "::warning ::SSH_HOST secret is not configured. Skipping automated remote deployment."
+            echo "configured=false" >> $GITHUB_OUTPUT
+          else
+            echo "configured=true" >> $GITHUB_OUTPUT
+          fi
+
       - name: Execute deployment via SSH
+        if: steps.check_ssh.outputs.configured == 'true'
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.SSH_HOST }}

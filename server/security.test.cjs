@@ -15,7 +15,8 @@ const root = path.resolve(__dirname, '..');
 const esbuild = createRequire(require.resolve('vite/package.json'))('esbuild');
 
 test('sessions, password migration, permissions, validation and concurrent saves', { timeout: 60000 }, async t => {
-  const env = dotenv.parse(fs.readFileSync(path.join(root,'.env')));
+  const envPath = path.join(root, '.env');
+  const env = fs.existsSync(envPath) ? dotenv.parse(fs.readFileSync(envPath)) : {};
   const admin = new pg.Client({connectionString:process.env.DATABASE_URL || env.DATABASE_URL});
   await admin.connect();
   const schema = 'security_test_'+crypto.randomBytes(8).toString('hex');
