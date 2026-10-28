@@ -23,9 +23,11 @@ echo "🐳 Building and starting containers..."
 docker compose -f docker-compose.prod.yml up -d --build --remove-orphans
 
 echo "⏳ Waiting for service to become healthy..."
+APP_PORT=$(grep -E '^PORT=' .env | cut -d '=' -f2 | tr -d ' "\r' || true)
+APP_PORT="${APP_PORT:-3001}"
 MAX_ATTEMPTS=30
 ATTEMPT=0
-HEALTH_URL="http://127.0.0.1:3001/api/health"
+HEALTH_URL="http://127.0.0.1:${APP_PORT}/api/health"
 
 until curl -s -f "$HEALTH_URL" > /dev/null || [ $ATTEMPT -eq $MAX_ATTEMPTS ]; do
   ATTEMPT=$((ATTEMPT + 1))
