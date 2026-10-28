@@ -27,6 +27,10 @@ yarn-error.log*
 pnpm-debug.log*
 *.log
 
+# Database dumps
+*.sql
+*.dump
+
 # Editor & OS files
 .vscode/*
 !.vscode/extensions.json
