@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { User, Group, DayOverride } from "@/types";
 import { OccupancyCalendarGrid } from "@/components/OccupancyCalendarGrid";
-import { ScheduleProfileModal } from "@/components/ScheduleProfileModal";
+import { TimelineGroupsModal } from "@/components/TimelineGroupsModal";
 import { DayOverrideModal } from "@/components/DayOverrideModal";
 import { CreateGroupModal, GroupSettingsModal } from "@/components/GroupModals";
 import { AgentApiView } from "@/components/AgentApiView";
@@ -42,6 +42,7 @@ import {
   User as UserIcon,
   Bot,
   Globe,
+  Layers,
   ShieldCheck,
   Crown,
 } from "lucide-react";
@@ -239,6 +240,7 @@ export function App() {
   const [overrideTarget, setOverrideTarget] = useState<{
     user: User | null;
     date: Date | null;
+    groupId?: string;
     open: boolean;
   }>({ user: null, date: null, open: false });
 
@@ -382,22 +384,25 @@ export function App() {
     if (!activeGroup) return currentUser ? [currentUser] : [];
     const baseMembers: User[] = activeGroup.members
       .filter((m) => m.status === "accepted")
-      .map((m) => ({
-        id: m.user_id,
-        username: m.username,
-        display_name: m.display_name,
-        avatar_color: m.avatar_color,
-        avatar_url: m.avatar_url,
-        banner_url: m.banner_url,
-        timeline_style: m.timeline_style,
-        time_zone:
-          m.user_id === currentUser?.id
-            ? currentUser.time_zone || m.time_zone
-            : m.time_zone,
-        schedule_config: m.schedule_config,
-        overrides: m.overrides,
-        revision: m.revision,
-      }));
+      .map((m) => {
+        const isCurrent = m.user_id === currentUser?.id;
+        return {
+          id: m.user_id,
+          username: m.username,
+          display_name: isCurrent && currentUser.display_name ? currentUser.display_name : m.display_name,
+          avatar_color: isCurrent && currentUser.avatar_color ? currentUser.avatar_color : m.avatar_color,
+          avatar_url: isCurrent ? (currentUser.avatar_url ?? m.avatar_url) : m.avatar_url,
+          banner_url: isCurrent ? (currentUser.banner_url ?? m.banner_url) : m.banner_url,
+          timeline_style: isCurrent ? (currentUser.timeline_style || m.timeline_style) : m.timeline_style,
+          time_zone: isCurrent ? (currentUser.time_zone || m.time_zone) : m.time_zone,
+          schedule_config: isCurrent ? (currentUser.schedule_config || m.schedule_config) : m.schedule_config,
+          overrides: isCurrent ? (currentUser.overrides || m.overrides) : m.overrides,
+          revision: isCurrent ? (currentUser.revision ?? m.revision) : m.revision,
+          timeline_groups: isCurrent
+            ? (currentUser.timeline_groups ?? m.timeline_groups)
+            : m.timeline_groups,
+        };
+      });
 
     const localKey = currentUser ? `${currentUser.id}:${activeGroup.id}` : `${activeGroup.id}`;
     const savedOrder =
@@ -488,7 +493,8 @@ export function App() {
     userId: number,
     dateStr: string,
     override: DayOverride | null,
-    expectedOverride?: DayOverride | null
+    expectedOverride?: DayOverride | null,
+    groupId?: string
   ) => {
     if (!currentUser || userId !== currentUser.id) {
       toast.error("Редактировать можно только свой собственный график");
@@ -499,12 +505,21 @@ export function App() {
       method: override === null ? "DELETE" : "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        expectedOverride: expectedOverride === undefined ? currentUser.overrides?.[dateStr] ?? null : expectedOverride,
+        expectedOverride:
+          expectedOverride === undefined
+            ? (groupId && groupId !== "work"
+                ? currentUser.timeline_groups?.find((g) => g.id === groupId)?.overrides?.[dateStr] ?? null
+                : currentUser.overrides?.[dateStr] ?? null)
+            : expectedOverride,
         ...(override === null ? {} : { override }),
+        ...(groupId ? { groupId } : {}),
       }),
     });
     const data = await res.json();
-    if (!res.ok) { if (res.status === 409) await fetchAllData(currentUser.id); throw new Error(data.error || "Ошибка сохранения дня"); }
+    if (!res.ok) {
+      if (res.status === 409) await fetchAllData(currentUser.id);
+      throw new Error(data.error || "Ошибка сохранения дня");
+    }
     await fetchAllData(currentUser.id);
   };
 
@@ -1044,10 +1059,10 @@ export function App() {
             variant="outline"
             size="sm"
             onClick={() => setProfileModalOpen(true)}
-            className="w-full justify-start text-xs"
+            className="w-full justify-start text-xs font-medium"
           >
-            <Settings2 className="size-3.5" />
-            Мой график работы
+            <Layers className="size-3.5 text-primary" />
+            Группы таймлайнов
           </Button>
 
           <Button
@@ -1276,9 +1291,9 @@ export function App() {
               onToggleMemberFilter={handleToggleMemberFilter}
               onSelectCombinationPreset={(ids) => setSelectedMemberIds(ids)}
               onReorderMembers={handleReorderMembers}
-              onCellClick={(user, date) => {
+              onCellClick={(user, date, groupId) => {
                 if (user.id === currentUser.id) {
-                  setOverrideTarget({ user, date, open: true });
+                  setOverrideTarget({ user, date, groupId, open: true });
                 }
               }}
               onOpenMySchedule={() => setProfileModalOpen(true)}
@@ -1291,7 +1306,7 @@ export function App() {
         )}
       </main>
 
-      <ScheduleProfileModal
+      <TimelineGroupsModal
         open={profileModalOpen}
         onOpenChange={setProfileModalOpen}
         user={currentUser}
@@ -1303,6 +1318,7 @@ export function App() {
         onOpenChange={(open) => setOverrideTarget((p) => ({ ...p, open }))}
         user={overrideTarget.user}
         date={overrideTarget.date}
+        initialGroupId={overrideTarget.groupId}
         onSaveOverride={handleSaveDayOverride}
       />
 

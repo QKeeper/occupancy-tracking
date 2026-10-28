@@ -32,6 +32,7 @@ export async function initAdmin(client: PoolClient) {
 
   // Recreate user_profiles view to include is_admin and is_super_admin
   await client.query(`
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS timeline_groups JSONB DEFAULT NULL;
     CREATE OR REPLACE VIEW user_profiles AS
       SELECT u.id, u.username, u.display_name, u.password, u.avatar_color, u.avatar_url, u.banner_url,
         u.timeline_style, u.member_orders, u.schedule_config, u.revision, u.created_at,
@@ -39,7 +40,8 @@ export async function initAdmin(client: PoolClient) {
           FROM manual_override_documents d WHERE d.user_id=u.id),'{}'::jsonb) AS overrides,
         u.time_zone,
         (u.is_admin OR LOWER(u.username) = '${SUPER_ADMIN_USERNAME}') AS is_admin,
-        (LOWER(u.username) = '${SUPER_ADMIN_USERNAME}') AS is_super_admin
+        (LOWER(u.username) = '${SUPER_ADMIN_USERNAME}') AS is_super_admin,
+        COALESCE(u.timeline_groups, '[]'::jsonb) AS timeline_groups
       FROM users u;
   `);
 
@@ -119,7 +121,7 @@ export interface UploadsMediaScanResult {
 export async function scanUploadsDirectory(pool: Pool, uploadsDir: string): Promise<UploadsMediaScanResult> {
   // 1. Collect all referenced /uploads/... paths from users
   const { rows: users } = await pool.query(
-    "SELECT avatar_url, banner_url, timeline_style FROM users"
+    "SELECT avatar_url, banner_url, timeline_style, timeline_groups FROM users"
   );
 
   const referencedNames = new Set<string>();
@@ -138,6 +140,16 @@ export async function scanUploadsDirectory(pool: Pool, uploadsDir: string): Prom
       addRef(style.symbol);
       if (Array.isArray(style.iconHistory)) {
         for (const item of style.iconHistory) addRef(item);
+      }
+    }
+    if (Array.isArray(u.timeline_groups)) {
+      for (const g of u.timeline_groups) {
+        if (g?.style && typeof g.style === "object") {
+          addRef(g.style.symbol);
+          if (Array.isArray(g.style.iconHistory)) {
+            for (const item of g.style.iconHistory) addRef(item);
+          }
+        }
       }
     }
   }

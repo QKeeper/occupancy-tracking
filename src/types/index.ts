@@ -44,6 +44,15 @@ export interface TimelineStyleConfig {
   iconHistory?: string[];
 }
 
+export interface TimelineGroup {
+  id: string; // e.g. "work", "sleep", or custom string
+  name: string; // e.g. "График работы", "Сон"
+  style: TimelineStyleConfig;
+  schedule_config: ScheduleConfig;
+  overrides?: OverrideMap;
+  is_enabled?: boolean;
+}
+
 export interface User {
   revision: number;
   id: number;
@@ -53,6 +62,7 @@ export interface User {
   avatar_url?: string | null;
   banner_url?: string | null;
   timeline_style?: TimelineStyleConfig;
+  timeline_groups?: TimelineGroup[];
   member_orders?: Record<string, number[]>;
   time_zone?: string;
   schedule_config: ScheduleConfig;

@@ -145,6 +145,7 @@ export async function migrateManualOverrides(client: PoolClient) {
               FROM occupancy_intervals i WHERE i.user_id=d.user_id AND i.override_date=d.override_date),'[]'::jsonb))) AS value
         FROM day_overrides d;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS timeline_groups JSONB DEFAULT NULL;
       CREATE OR REPLACE VIEW user_profiles AS
         SELECT u.id,u.username,u.display_name,u.password,u.avatar_color,u.avatar_url,u.banner_url,
           u.timeline_style,u.member_orders,u.schedule_config,u.revision,u.created_at,
@@ -152,7 +153,8 @@ export async function migrateManualOverrides(client: PoolClient) {
             FROM manual_override_documents d WHERE d.user_id=u.id),'{}'::jsonb) AS overrides,
           u.time_zone,
           (u.is_admin OR LOWER(u.username)='qkeeper') AS is_admin,
-          (LOWER(u.username)='qkeeper') AS is_super_admin
+          (LOWER(u.username)='qkeeper') AS is_super_admin,
+          COALESCE(u.timeline_groups, '[]'::jsonb) AS timeline_groups
         FROM users u;
     `);
 

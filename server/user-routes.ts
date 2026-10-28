@@ -6,7 +6,7 @@ import type { TimelineStyleConfig } from "../src/types";
 import { z } from "zod";
 import { dateSchema, overrideSchema, profileSchema, revisionSchema, scheduleFieldsSchema, scheduleSchema } from "./validation";
 
-export const USER_COLUMNS = "id, username, display_name, avatar_color, avatar_url, banner_url, timeline_style, member_orders, schedule_config, overrides, revision, created_at, time_zone, is_admin, is_super_admin";
+export const USER_COLUMNS = "id, username, display_name, avatar_color, avatar_url, banner_url, timeline_style, member_orders, schedule_config, overrides, revision, created_at, time_zone, is_admin, is_super_admin, timeline_groups";
 export function installUserRoutes(app: Express, pool: Pool, broadcast: (type: string, payload: any) => void,
   saveImage: (value: string | null | undefined, kind: "avatar" | "banner") => string | null,
   normalizeStyle: (style: TimelineStyleConfig) => Promise<TimelineStyleConfig>) {
@@ -18,12 +18,22 @@ export function installUserRoutes(app: Express, pool: Pool, broadcast: (type: st
     try {
       const { revision, ...changes } = profileSchema.parse(req.body);
       if (changes.timeline_style) changes.timeline_style = await normalizeStyle(changes.timeline_style);
+      if (changes.timeline_groups) {
+        for (const g of changes.timeline_groups) {
+          if (g.style) g.style = await normalizeStyle(g.style);
+        }
+        const workGroup = changes.timeline_groups.find((g) => g.id === "work");
+        if (workGroup) {
+          if (!changes.schedule_config) changes.schedule_config = workGroup.schedule_config;
+          if (!changes.timeline_style) changes.timeline_style = workGroup.style;
+        }
+      }
       if (!Object.keys(changes).length) return res.status(400).json({ error: "Нет изменений" });
       const params: unknown[] = [];
       const sets = Object.entries(changes).map(([key, value]) => {
         let stored: unknown = value;
         if (key === "avatar_url" || key === "banner_url") stored = saveImage(value as string | null, key === "avatar_url" ? "avatar" : "banner");
-        if (["timeline_style", "schedule_config"].includes(key)) stored = JSON.stringify(value);
+        if (["timeline_style", "schedule_config", "timeline_groups"].includes(key)) stored = JSON.stringify(value);
         params.push(stored);
         // Keys are restricted by the strict profile schema, never raw input.
         return `${key}=$${params.length}`;
@@ -64,6 +74,13 @@ export function installUserRoutes(app: Express, pool: Pool, broadcast: (type: st
     try {
       if (Number(req.params.id) !== res.locals.userId) throw new HttpError(403, "Можно читать только свои ручные правки");
       const date = dateSchema.parse(req.params.date);
+      const groupId = typeof req.query.groupId === "string" ? req.query.groupId : "work";
+      if (groupId !== "work") {
+        const { rows } = await pool.query("SELECT timeline_groups FROM users WHERE id=$1", [res.locals.userId]);
+        const groups = Array.isArray(rows[0]?.timeline_groups) ? rows[0].timeline_groups : [];
+        const g = groups.find((item: any) => item.id === groupId);
+        return res.json({ date, override: g?.overrides?.[date] ?? null });
+      }
       const { rows } = await pool.query("SELECT value FROM manual_override_documents WHERE user_id=$1 AND override_date=$2", [res.locals.userId, date]);
       res.json({ date, override: rows[0]?.value ?? null });
     } catch (e) { next(e); }
@@ -76,19 +93,48 @@ export function installUserRoutes(app: Express, pool: Pool, broadcast: (type: st
       try {
         const date = dateSchema.parse(req.params.date);
         const schema = method === "put"
-          ? z.object({ expectedOverride: overrideSchema.nullable(), override: overrideSchema }).strict()
-          : z.object({ expectedOverride: overrideSchema.nullable() }).strict();
+          ? z.object({ expectedOverride: overrideSchema.nullable(), override: overrideSchema, groupId: z.string().optional() }).strict()
+          : z.object({ expectedOverride: overrideSchema.nullable(), groupId: z.string().optional() }).strict();
         const body = schema.parse(req.body);
+        const targetGroupId = body.groupId || "work";
         const nextOverride = "override" in body ? overrideSchema.parse(body.override) : null;
         client = await pool.connect();
         await client.query("BEGIN");
-        await client.query("SELECT id FROM users WHERE id=$1 FOR UPDATE", [res.locals.userId]);
-        const current = await client.query(`SELECT COALESCE((SELECT value FROM manual_override_documents
-          WHERE user_id=$1 AND override_date=$2::date),'null'::jsonb)=$3::jsonb AS matches`,
-          [res.locals.userId, date, JSON.stringify(body.expectedOverride)]);
-        if (!current.rows[0].matches) throw new HttpError(409, "Этот день уже изменён в другой вкладке. Обновите данные");
-        await replaceManualDay(client, res.locals.userId, date, nextOverride);
-        await client.query("UPDATE users SET revision=revision+1 WHERE id=$1", [res.locals.userId]);
+        const { rows: userRows } = await client.query("SELECT id, timeline_groups FROM users WHERE id=$1 FOR UPDATE", [res.locals.userId]);
+
+        if (targetGroupId === "work") {
+          const current = await client.query(`SELECT COALESCE((SELECT value FROM manual_override_documents
+            WHERE user_id=$1 AND override_date=$2::date),'null'::jsonb)=$3::jsonb AS matches`,
+            [res.locals.userId, date, JSON.stringify(body.expectedOverride)]);
+          if (!current.rows[0].matches) throw new HttpError(409, "Этот день уже изменён в другой вкладке. Обновите данные");
+          await replaceManualDay(client, res.locals.userId, date, nextOverride);
+          if (Array.isArray(userRows[0]?.timeline_groups)) {
+            const nextGroups = userRows[0].timeline_groups.map((g: any) => {
+              if (g.id === "work") {
+                const ov = { ...(g.overrides || {}) };
+                if (nextOverride) ov[date] = nextOverride; else delete ov[date];
+                return { ...g, overrides: ov };
+              }
+              return g;
+            });
+            await client.query("UPDATE users SET timeline_groups=$1 WHERE id=$2", [JSON.stringify(nextGroups), res.locals.userId]);
+          }
+          await client.query("UPDATE users SET revision=revision+1 WHERE id=$1", [res.locals.userId]);
+        } else {
+          const groups = Array.isArray(userRows[0]?.timeline_groups) ? [...userRows[0].timeline_groups] : [];
+          const groupIdx = groups.findIndex((g: any) => g.id === targetGroupId);
+          if (groupIdx >= 0) {
+            const existingOv = groups[groupIdx].overrides?.[date] ?? null;
+            if (body.expectedOverride !== undefined && JSON.stringify(existingOv) !== JSON.stringify(body.expectedOverride)) {
+              throw new HttpError(409, "Этот день уже изменён в другой вкладке. Обновите данные");
+            }
+            const nextOvMap = { ...(groups[groupIdx].overrides || {}) };
+            if (nextOverride) nextOvMap[date] = nextOverride; else delete nextOvMap[date];
+            groups[groupIdx] = { ...groups[groupIdx], overrides: nextOvMap };
+            await client.query("UPDATE users SET timeline_groups=$1, revision=revision+1 WHERE id=$2", [JSON.stringify(groups), res.locals.userId]);
+          }
+        }
+
         const profile = await client.query(`SELECT ${USER_COLUMNS} FROM user_profiles WHERE id=$1`, [res.locals.userId]);
         await client.query("COMMIT");
         broadcast("schedule_updated", { userId: res.locals.userId, dateStr: date });

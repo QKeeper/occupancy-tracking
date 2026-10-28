@@ -1,4 +1,13 @@
-import { ComputedDaySchedule, DayWeeklySchedule, ScheduleConfig, TimeSlot, User } from "@/types";
+import {
+  ComputedDaySchedule,
+  DayWeeklySchedule,
+  ScheduleConfig,
+  TimeSlot,
+  User,
+  TimelineGroup,
+  TimelineStyleConfig,
+} from "@/types";
+import { DEFAULT_TIMELINE_STYLE } from "@/lib/timeline-pattern";
 import { addDays, differenceInCalendarDays, format, parseISO } from "date-fns";
 
 export const DEFAULT_SCHEDULE_TIMEZONE = "Asia/Yekaterinburg";
@@ -398,11 +407,43 @@ interface RawDaySchedule extends ComputedDaySchedule {
   timeZone: string;
 }
 
-function getRawUserDaySchedule(user: User, date: Date): RawDaySchedule {
+export function getUserTimelineGroups(user: Partial<User>): TimelineGroup[] {
+  if (Array.isArray(user.timeline_groups) && user.timeline_groups.length > 0) {
+    return user.timeline_groups.map((g) => ({
+      ...g,
+      is_enabled: g.is_enabled ?? true,
+      overrides: g.overrides || (g.id === "work" ? user.overrides || {} : {}),
+      style: g.style || (g.id === "work" ? user.timeline_style || DEFAULT_TIMELINE_STYLE : DEFAULT_TIMELINE_STYLE),
+    }));
+  }
+
+  const workGroup: TimelineGroup = {
+    id: "work",
+    name: "График работы",
+    style: user.timeline_style || {
+      bgColor: "#e11d48",
+      patternColor: "#fda4af",
+      patternType: "stripes",
+      symbol: "⚡",
+      iconScale: 1,
+    },
+    schedule_config: user.schedule_config || { mode: "fixed_weekly" },
+    overrides: user.overrides || {},
+    is_enabled: true,
+  };
+
+  return [workGroup];
+}
+
+export function getRawGroupDaySchedule(
+  group: TimelineGroup,
+  date: Date,
+  defaultTimeZone = DEFAULT_SCHEDULE_TIMEZONE
+): RawDaySchedule {
   const dateStr = format(date, "yyyy-MM-dd");
-  const overrides = user.overrides || {};
-  const config = user.schedule_config || { mode: "fixed_weekly" };
-  const baseTimeZone = normalizeTimeZone(config.timeZone);
+  const overrides = group.overrides || {};
+  const config = group.schedule_config || { mode: "fixed_weekly" };
+  const baseTimeZone = normalizeTimeZone(config.timeZone || defaultTimeZone);
 
   // 1. Check explicit manual override on this date
   if (overrides[dateStr]) {
@@ -422,7 +463,7 @@ function getRawUserDaySchedule(user: User, date: Date): RawDaySchedule {
       slots,
       isOverride: true,
       note: ov.note,
-      sourceLabel: "Ручная правка",
+      sourceLabel: `${group.name} (правка)`,
       busyHoursCount,
       freeIntervals: computeFreeIntervals(slots),
       timeZone: normalizeTimeZone(ov.timeZone),
@@ -448,7 +489,7 @@ function getRawUserDaySchedule(user: User, date: Date): RawDaySchedule {
       status: !isWorkDay ? "free" : busyHoursCount <= 5 ? "partial" : "working",
       slots: activeSlots,
       isOverride: false,
-      sourceLabel: `Сменный ${workDays}/${offDays}`,
+      sourceLabel: `${group.name} (${workDays}/${offDays})`,
       busyHoursCount,
       freeIntervals: computeFreeIntervals(activeSlots),
       timeZone: baseTimeZone,
@@ -467,7 +508,7 @@ function getRawUserDaySchedule(user: User, date: Date): RawDaySchedule {
       status: !isWorking || activeSlots.length === 0 ? "free" : busyHoursCount <= 5 ? "partial" : "working",
       slots: activeSlots,
       isOverride: false,
-      sourceLabel: "Недельный график",
+      sourceLabel: `${group.name} (недельный)`,
       busyHoursCount,
       freeIntervals: computeFreeIntervals(activeSlots),
       timeZone: baseTimeZone,
@@ -480,10 +521,62 @@ function getRawUserDaySchedule(user: User, date: Date): RawDaySchedule {
     status: "free",
     slots: [],
     isOverride: false,
-    sourceLabel: "Свободный график",
+    sourceLabel: `${group.name} (свободный)`,
     busyHoursCount: 0,
     freeIntervals: computeFreeIntervals([]),
     timeZone: baseTimeZone,
+  };
+}
+
+function getRawUserDaySchedule(user: User, date: Date): RawDaySchedule {
+  const groups = getUserTimelineGroups(user).filter((g) => g.is_enabled !== false);
+  if (groups.length === 0) {
+    return {
+      dateStr: format(date, "yyyy-MM-dd"),
+      status: "free",
+      slots: [],
+      isOverride: false,
+      sourceLabel: "Свободный график",
+      busyHoursCount: 0,
+      freeIntervals: computeFreeIntervals([]),
+      timeZone: normalizeTimeZone(user.time_zone),
+    };
+  }
+
+  const baseTimeZone = normalizeTimeZone(user.time_zone || DEFAULT_SCHEDULE_TIMEZONE);
+  const combinedSlots: TimeSlot[] = [];
+  let isOverride = false;
+  let overrideTimeZone = baseTimeZone;
+  let note: string | undefined;
+
+  for (const group of groups) {
+    const groupSched = getRawGroupDaySchedule(group, date, baseTimeZone);
+    combinedSlots.push(...groupSched.slots);
+    if (groupSched.isOverride) {
+      isOverride = true;
+      overrideTimeZone = groupSched.timeZone;
+      if (groupSched.note) note = groupSched.note;
+    }
+  }
+
+  const busyHoursCount = computeBusyHours(combinedSlots);
+  const status =
+    combinedSlots.length === 0
+      ? "free"
+      : isOverride && busyHoursCount <= 5
+      ? "partial"
+      : "working";
+
+  return {
+    dateStr: format(date, "yyyy-MM-dd"),
+    status,
+    slots: combinedSlots,
+    isOverride,
+    note,
+    sourceLabel: groups.map((g) => g.name).join(", "),
+    busyHoursCount,
+    freeIntervals: computeFreeIntervals(combinedSlots),
+    timeZone: isOverride ? overrideTimeZone : baseTimeZone,
   };
 }
 
@@ -631,10 +724,15 @@ export interface ContinuousBusyBlock extends ContinuousInterval {
   isOverride: boolean;
   note?: string;
   sourceDate?: Date;
+  groupId?: string;
+  groupName?: string;
+  style?: TimelineStyleConfig;
 }
 
 /**
  * Keeps each busy slot separate, with overnight slots and timezone shifts continuous across midnight.
+ * Iterates through all active timeline groups of the user so each group's blocks render on the timeline
+ * with its own distinct styling.
  */
 export function computeUserContinuousBusyBlocks(
   user: User,
@@ -648,52 +746,60 @@ export function computeUserContinuousBusyBlocks(
   const totalMins = days.length * 1440;
   const minDIdx = targetTz ? -2 : -1;
   const maxDIdx = targetTz ? days.length : days.length - 1;
+  const baseTimeZone = normalizeTimeZone(user.time_zone || DEFAULT_SCHEDULE_TIMEZONE);
 
-  for (let dIdx = minDIdx; dIdx <= maxDIdx; dIdx++) {
-    const day = dIdx >= 0 && dIdx < days.length ? days[dIdx] : addDays(days[0], dIdx);
-    const sched = getRawUserDaySchedule(user, day);
-    const dayOffset = dIdx * 1440;
-    const deltaMins = targetTz
-      ? getTimeZoneOffsetMinutes(targetTz, day) - getTimeZoneOffsetMinutes(sched.timeZone, day)
-      : 0;
+  const groups = getUserTimelineGroups(user).filter((g) => g.is_enabled !== false);
 
-    for (const slot of sched.slots) {
-      const st = timeToMinutes(slot.start);
-      const en = timeToMinutes(slot.end);
-      if (en === st) continue;
+  for (const group of groups) {
+    for (let dIdx = minDIdx; dIdx <= maxDIdx; dIdx++) {
+      const day = dIdx >= 0 && dIdx < days.length ? days[dIdx] : addDays(days[0], dIdx);
+      const sched = getRawGroupDaySchedule(group, day, baseTimeZone);
+      const dayOffset = dIdx * 1440;
+      const deltaMins = targetTz
+        ? getTimeZoneOffsetMinutes(targetTz, day) - getTimeZoneOffsetMinutes(sched.timeZone, day)
+        : 0;
 
-      const isOvernight = en < st;
-      if (deltaMins === 0 && !isOvernight && dIdx < 0) continue;
+      for (const slot of sched.slots) {
+        const st = timeToMinutes(slot.start);
+        const en = timeToMinutes(slot.end);
+        if (en === st) continue;
 
-      const rawStart = dayOffset + st;
-      const rawEnd = dayOffset + (en > st ? en : 1440 + en);
-      const shiftedStart = rawStart + deltaMins;
-      const shiftedEnd = rawEnd + deltaMins;
+        const isOvernight = en < st;
+        if (deltaMins === 0 && !isOvernight && dIdx < 0) continue;
 
-      const clampedStart = Math.max(0, shiftedStart);
-      const clampedEnd = Math.min(totalMins, shiftedEnd);
-      if (clampedEnd > clampedStart) {
-        const startMod = ((shiftedStart % 1440) + 1440) % 1440;
-        const endMod = ((shiftedEnd % 1440) + 1440) % 1440;
-        const startTimeLabel = deltaMins === 0 ? slot.start : minutesToTime(startMod);
-        const endTimeLabel =
-          deltaMins === 0
-            ? !isOvernight && slot.end === "00:00"
+        const rawStart = dayOffset + st;
+        const rawEnd = dayOffset + (en > st ? en : 1440 + en);
+        const shiftedStart = rawStart + deltaMins;
+        const shiftedEnd = rawEnd + deltaMins;
+
+        const clampedStart = Math.max(0, shiftedStart);
+        const clampedEnd = Math.min(totalMins, shiftedEnd);
+        if (clampedEnd > clampedStart) {
+          const startMod = ((shiftedStart % 1440) + 1440) % 1440;
+          const endMod = ((shiftedEnd % 1440) + 1440) % 1440;
+          const startTimeLabel = deltaMins === 0 ? slot.start : minutesToTime(startMod);
+          const endTimeLabel =
+            deltaMins === 0
+              ? !isOvernight && slot.end === "00:00"
+                ? "24:00"
+                : slot.end
+              : endMod === 0
               ? "24:00"
-              : slot.end
-            : endMod === 0
-            ? "24:00"
-            : minutesToTime(endMod);
+              : minutesToTime(endMod);
 
-        raw.push({
-          startMin: clampedStart,
-          endMin: clampedEnd,
-          startTimeLabel,
-          endTimeLabel,
-          isOverride: sched.isOverride,
-          note: sched.note,
-          sourceDate: day,
-        });
+          raw.push({
+            startMin: clampedStart,
+            endMin: clampedEnd,
+            startTimeLabel,
+            endTimeLabel,
+            isOverride: sched.isOverride,
+            note: sched.note,
+            sourceDate: day,
+            groupId: group.id,
+            groupName: group.name,
+            style: group.style,
+          });
+        }
       }
     }
   }

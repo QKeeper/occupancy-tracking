@@ -124,6 +124,7 @@ async function initDb() {
       ALTER TABLE users ADD COLUMN IF NOT EXISTS timeline_style JSONB NOT NULL DEFAULT '{"bgColor":"#e11d48","patternColor":"#fda4af","patternType":"stripes","symbol":"⚡"}'::jsonb;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS member_orders JSONB NOT NULL DEFAULT '{}'::jsonb;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS time_zone TEXT NOT NULL DEFAULT 'Asia/Yekaterinburg';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS timeline_groups JSONB DEFAULT NULL;
 
       CREATE TABLE IF NOT EXISTS groups (
         id SERIAL PRIMARY KEY,
@@ -151,6 +152,31 @@ async function initDb() {
     await migrateManualOverrides(client);
     await initAdmin(client);
     await patternMedia.migrate(client);
+
+    // Initialize default timeline groups for existing users who do not have any groups configured
+    const { rows: usersWithoutGroups } = await client.query(
+      "SELECT id, schedule_config, timeline_style FROM users WHERE timeline_groups IS NULL OR timeline_groups = '[]'::jsonb"
+    );
+    for (const u of usersWithoutGroups) {
+      const defaultGroups = [
+        {
+          id: "work",
+          name: "График работы",
+          style: u.timeline_style || {
+            bgColor: "#e11d48",
+            patternColor: "#fda4af",
+            patternType: "stripes",
+            symbol: "⚡",
+          },
+          schedule_config: u.schedule_config || { mode: "fixed_weekly" },
+          is_enabled: true,
+        },
+      ];
+      await client.query("UPDATE users SET timeline_groups = $1 WHERE id = $2", [
+        JSON.stringify(defaultGroups),
+        u.id,
+      ]);
+    }
 
     // Automatically migrate any legacy base64 avatar_url / banner_url stored in DB into static /uploads files
     const { rows: base64Users } = await client.query(
@@ -365,7 +391,7 @@ app.post("/api/auth/login", async (req, res) => {
     const { username, password } = parsed.data;
     const cleanUsername = username.toLowerCase().replace(/^@/, "");
     const { rows } = await pool.query(
-      "SELECT id, username, display_name, password, avatar_color, avatar_url, banner_url, timeline_style, member_orders, schedule_config, overrides, revision, time_zone, is_admin, is_super_admin FROM user_profiles WHERE LOWER(username) = $1",
+      "SELECT id, username, display_name, password, avatar_color, avatar_url, banner_url, timeline_style, member_orders, schedule_config, overrides, revision, time_zone, is_admin, is_super_admin, timeline_groups FROM user_profiles WHERE LOWER(username) = $1",
       [cleanUsername]
     );
     if (rows.length === 0) {
@@ -413,9 +439,48 @@ app.post("/api/auth/register", async (req, res) => {
       },
     };
 
+    const defaultTimelineGroups = [
+      {
+        id: "work",
+        name: "График работы",
+        style: {
+          bgColor: "#e11d48",
+          patternColor: "#fda4af",
+          patternType: "stripes",
+          symbol: "⚡",
+        },
+        schedule_config: defaultSchedule,
+        is_enabled: true,
+      },
+      {
+        id: "sleep",
+        name: "Сон",
+        style: {
+          bgColor: "#1e293b",
+          patternColor: "#64748b",
+          patternType: "symbols",
+          symbol: "🌙",
+          iconScale: 1,
+        },
+        schedule_config: {
+          mode: "fixed_weekly",
+          weekly: {
+            "0": { isWorking: true, slots: [{ start: "23:00", end: "07:00" }] },
+            "1": { isWorking: true, slots: [{ start: "23:00", end: "07:00" }] },
+            "2": { isWorking: true, slots: [{ start: "23:00", end: "07:00" }] },
+            "3": { isWorking: true, slots: [{ start: "23:00", end: "07:00" }] },
+            "4": { isWorking: true, slots: [{ start: "23:00", end: "07:00" }] },
+            "5": { isWorking: true, slots: [{ start: "23:00", end: "07:00" }] },
+            "6": { isWorking: true, slots: [{ start: "23:00", end: "07:00" }] },
+          },
+        },
+        is_enabled: true,
+      },
+    ];
+
     const { rows } = await pool.query(
-      `INSERT INTO users (username, display_name, password, avatar_color, schedule_config, time_zone, is_admin)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `INSERT INTO users (username, display_name, password, avatar_color, schedule_config, time_zone, is_admin, timeline_groups)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING id`,
       [
         cleanUsername,
@@ -425,6 +490,7 @@ app.post("/api/auth/register", async (req, res) => {
         JSON.stringify(defaultSchedule),
         userTimeZone,
         isSuperAdminUsername(cleanUsername),
+        JSON.stringify(defaultTimelineGroups),
       ]
     );
     await issueSession(pool, req, res, rows[0].id);
@@ -509,7 +575,7 @@ app.get("/api/groups", async (req, res) => {
       `SELECT gm.group_id, gm.user_id, gm.status, gm.invited_by, gm.joined_at,
               u.username, u.display_name, u.avatar_color, u.avatar_url, u.banner_url,
               (u.timeline_style - 'iconHistory') AS timeline_style,
-              u.schedule_config, u.overrides, u.revision, u.time_zone,
+              u.schedule_config, u.overrides, u.revision, u.time_zone, u.timeline_groups,
               inv.display_name as invited_by_name, inv.username as invited_by_username
        FROM group_members gm
        JOIN user_profiles u ON gm.user_id = u.id
@@ -562,13 +628,13 @@ app.get("/api/users", async (req, res) => {
     const rawUname = req.query.username ? String(req.query.username).trim().toLowerCase().replace(/^@/, "") : "";
     if (rawUname) {
       const { rows } = await pool.query(
-        "SELECT id, username, display_name, avatar_color, avatar_url, schedule_config, overrides, revision, created_at, time_zone FROM user_profiles WHERE LOWER(username) LIKE $1 ORDER BY id ASC",
+        "SELECT id, username, display_name, avatar_color, avatar_url, schedule_config, overrides, revision, created_at, time_zone, timeline_groups FROM user_profiles WHERE LOWER(username) LIKE $1 ORDER BY id ASC",
         [`%${rawUname}%`]
       );
       return res.json(rows);
     }
     const { rows } = await pool.query(
-      "SELECT id, username, display_name, avatar_color, avatar_url, schedule_config, overrides, revision, created_at, time_zone FROM user_profiles ORDER BY id ASC"
+      "SELECT id, username, display_name, avatar_color, avatar_url, schedule_config, overrides, revision, created_at, time_zone, timeline_groups FROM user_profiles ORDER BY id ASC"
     );
     res.json(rows);
   } catch (err: any) {
@@ -590,7 +656,7 @@ app.get("/api/groups/:groupId/availability", async (req, res) => {
 
     const { rows: memberRows } = await pool.query(
       `SELECT u.id, u.username, u.display_name, u.avatar_color, u.avatar_url,
-              u.schedule_config, u.overrides, u.time_zone
+              u.schedule_config, u.overrides, u.time_zone, u.timeline_groups
        FROM group_members gm
        JOIN user_profiles u ON gm.user_id = u.id
        WHERE gm.group_id = $1 AND gm.status = 'accepted'
@@ -675,6 +741,24 @@ app.get("/api/groups/:groupId/availability", async (req, res) => {
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// Redirect external visits to the official production domain
+app.use((req, res, next) => {
+  const host = (req.headers["x-forwarded-host"] || req.headers.host || "").toString().toLowerCase();
+  if (
+    !host.includes("schedule.ssdk.dev") &&
+    !host.includes("localhost") &&
+    !host.includes("127.0.0.1") &&
+    !req.path.startsWith("/api") &&
+    !req.path.startsWith("/uploads") &&
+    req.path !== "/openapi.json" &&
+    req.path !== "/llms.txt" &&
+    (req.method === "GET" || req.method === "HEAD")
+  ) {
+    return res.redirect(302, `https://schedule.ssdk.dev${req.originalUrl}`);
+  }
+  next();
 });
 
 // In production, serve the built SPA from /dist if it exists

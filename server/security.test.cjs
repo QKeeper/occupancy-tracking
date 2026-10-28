@@ -368,6 +368,43 @@ test('sessions, password migration, permissions, validation and concurrent saves
       assert.ok(cleanup.data.deletedCount>=1);
       assert.equal(fs.existsSync(orphanPath),false);
     });
+    await t.test('users can create and customize timeline groups (work, sleep, sport)',async()=>{
+      const me=(await call('GET','/api/auth/me',undefined,a.cookies)).data;
+      const groups=[
+        {
+          id:'work',
+          name:'График работы',
+          style:{bgColor:'#e11d48',patternColor:'#fda4af',patternType:'stripes',symbol:'⚡'},
+          schedule_config:{mode:'fixed_weekly',weekly:{'1':{isWorking:true,slots:[{start:'09:00',end:'18:00'}]}}},
+          is_enabled:true
+        },
+        {
+          id:'sleep',
+          name:'Сон',
+          style:{bgColor:'#1e293b',patternColor:'#94a3b8',patternType:'symbols',symbol:'🌙'},
+          schedule_config:{mode:'fixed_weekly',weekly:{'1':{isWorking:true,slots:[{start:'23:00',end:'07:00'}]}}},
+          is_enabled:true
+        }
+      ];
+
+      const save=await call('PUT',`/api/users/${a.data.id}`,{revision:me.revision,timeline_groups:groups},a.cookies);
+      assert.equal(save.status,200);
+      assert.equal(save.data.timeline_groups.length,2);
+      assert.equal(save.data.timeline_groups[0].name,'График работы');
+      assert.equal(save.data.timeline_groups[1].name,'Сон');
+
+      // Add override specifically to sleep group
+      const ovSleep=await call('PUT',`/api/users/${a.data.id}/overrides/2026-11-10`,{
+        expectedOverride:null,
+        groupId:'sleep',
+        override:{status:'working',slots:[{start:'22:00',end:'06:00'}]}
+      },a.cookies);
+      assert.equal(ovSleep.status,200);
+      const updatedMe=(await call('GET','/api/auth/me',undefined,a.cookies)).data;
+      const sleepGroup=updatedMe.timeline_groups.find(g=>g.id==='sleep');
+      assert.ok(sleepGroup.overrides['2026-11-10']);
+      assert.equal(sleepGroup.overrides['2026-11-10'].slots[0].start,'22:00');
+    });
   } finally {
     if(child && child.exitCode===null){ child.kill(); await new Promise(r=>child.once('exit',r)); }
     await admin.query(`DROP SCHEMA "${schema}" CASCADE`);

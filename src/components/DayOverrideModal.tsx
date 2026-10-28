@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from "react";
-import { User, DayOverride, TimeSlot } from "@/types";
+import { User, DayOverride, TimeSlot, TimelineGroup } from "@/types";
 import {
   DEFAULT_SCHEDULE_TIMEZONE,
   formatTimeZoneShort,
-  getUserDaySchedule,
+  getRawGroupDaySchedule,
+  getUserTimelineGroups,
   normalizeTimeZone,
 } from "@/lib/schedule-engine";
 import {
@@ -28,7 +29,14 @@ interface DayOverrideModalProps {
   onOpenChange: (open: boolean) => void;
   user: User | null;
   date: Date | null;
-  onSaveOverride: (userId: number, dateStr: string, override: DayOverride | null, expectedOverride?: DayOverride | null) => Promise<void>;
+  initialGroupId?: string;
+  onSaveOverride: (
+    userId: number,
+    dateStr: string,
+    override: DayOverride | null,
+    expectedOverride?: DayOverride | null,
+    groupId?: string
+  ) => Promise<void>;
 }
 
 export const DayOverrideModal: React.FC<DayOverrideModalProps> = ({
@@ -36,35 +44,61 @@ export const DayOverrideModal: React.FC<DayOverrideModalProps> = ({
   onOpenChange,
   user,
   date,
+  initialGroupId,
   onSaveOverride,
 }) => {
+  const groups: TimelineGroup[] = user ? getUserTimelineGroups(user) : [];
+  const [selectedGroupId, setSelectedGroupId] = useState<string>(initialGroupId || "work");
   const [status, setStatus] = useState<"free" | "working" | "partial">("free");
   const [slots, setSlots] = useState<TimeSlot[]>([]);
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
   const [expectedOverride, setExpectedOverride] = useState<DayOverride | null>(null);
 
+  // Sync selected group and form state when opening or switching group
   useEffect(() => {
-    if (open && user && date) {
+    if (!open || !user || !date) return;
+    const targetId = initialGroupId && groups.some((g) => g.id === initialGroupId)
+      ? initialGroupId
+      : groups[0]?.id || "work";
+    setSelectedGroupId(targetId);
+  }, [open, user?.id, initialGroupId]);
+
+  useEffect(() => {
+    if (!open || !user || !date) return;
+    const currentGroup = groups.find((g) => g.id === selectedGroupId) || groups[0];
+    if (!currentGroup) return;
+
+    const dateStr = format(date, "yyyy-MM-dd");
+    const groupOverride = currentGroup.overrides?.[dateStr] ?? null;
+    setExpectedOverride(groupOverride);
+
+    if (groupOverride) {
+      setStatus(groupOverride.status);
+      setSlots(groupOverride.slots.length > 0 ? groupOverride.slots.map((s) => ({ ...s })) : []);
+      setNote(groupOverride.note || "");
+    } else {
       const viewerTz = normalizeTimeZone(user.time_zone || DEFAULT_SCHEDULE_TIMEZONE);
-      const computed = getUserDaySchedule(user, date, viewerTz);
-      setExpectedOverride(user.overrides?.[format(date, "yyyy-MM-dd")] ?? null);
+      const computed = getRawGroupDaySchedule(currentGroup, date, viewerTz);
       setStatus(computed.status);
       setSlots(
         computed.slots.length > 0
           ? computed.slots.map((s) => ({ ...s }))
+          : currentGroup.id === "sleep"
+          ? [{ start: "23:00", end: "07:00" }]
           : [{ start: "10:00", end: "18:00" }]
       );
       setNote(computed.note || "");
     }
-  }, [open, user?.id, user?.time_zone, date?.getTime()]);
+  }, [open, selectedGroupId, date?.getTime(), user?.id]);
 
   if (!user || !date) return null;
 
+  const currentGroup = groups.find((g) => g.id === selectedGroupId) || groups[0];
   const viewerTz = normalizeTimeZone(user.time_zone || DEFAULT_SCHEDULE_TIMEZONE);
   const dateStr = format(date, "yyyy-MM-dd");
   const formattedDate = format(date, "EEEE, d MMMM", { locale: ru });
-  const hasExistingOverride = Boolean(user.overrides?.[dateStr]);
+  const hasExistingOverride = Boolean(currentGroup?.overrides?.[dateStr]);
 
   const handleSave = async () => {
     setSaving(true);
@@ -79,7 +113,8 @@ export const DayOverrideModal: React.FC<DayOverrideModalProps> = ({
           note: note.trim() || undefined,
           ...(viewerTz !== DEFAULT_SCHEDULE_TIMEZONE ? { timeZone: viewerTz } : {}),
         },
-        expectedOverride
+        expectedOverride,
+        selectedGroupId
       );
       toast.success("Сохранено");
       onOpenChange(false);
@@ -93,8 +128,8 @@ export const DayOverrideModal: React.FC<DayOverrideModalProps> = ({
   const handleResetToDefault = async () => {
     setSaving(true);
     try {
-      await onSaveOverride(user.id, dateStr, null, expectedOverride);
-      toast.info("Сброшено к базовому графику");
+      await onSaveOverride(user.id, dateStr, null, expectedOverride, selectedGroupId);
+      toast.info("Сброшено к базовому расписанию группы");
       onOpenChange(false);
     } catch (e: any) {
       toast.error(e.message || "Ошибка сброса");
@@ -112,6 +147,39 @@ export const DayOverrideModal: React.FC<DayOverrideModalProps> = ({
             {formattedDate} • {formatTimeZoneShort(viewerTz)}
           </DialogDescription>
         </DialogHeader>
+
+        {/* Переключатель группы таймлайнов */}
+        {groups.length > 1 && (
+          <div className="space-y-1.5 pt-1">
+            <Label className="text-xs text-muted-foreground">Группа таймлайна:</Label>
+            <div className="flex flex-wrap gap-1.5">
+              {groups.map((g) => {
+                const isActive = g.id === selectedGroupId;
+                return (
+                  <button
+                    key={g.id}
+                    type="button"
+                    onClick={() => setSelectedGroupId(g.id)}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-medium flex items-center gap-1.5 border transition-all cursor-pointer ${
+                      isActive
+                        ? "border-primary bg-primary/10 text-foreground ring-1 ring-primary/40 shadow-xs"
+                        : "border-border bg-card/60 text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    <span
+                      className="size-2 rounded-full shrink-0"
+                      style={{ backgroundColor: g.style.bgColor }}
+                    />
+                    <span>{g.name}</span>
+                    {g.overrides?.[dateStr] && (
+                      <span className="size-1.5 rounded-full bg-primary" title="Есть ручная правка" />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         <div className="space-y-4 py-2">
           <div className="grid grid-cols-3 gap-2">
@@ -140,7 +208,13 @@ export const DayOverrideModal: React.FC<DayOverrideModalProps> = ({
               size="sm"
               onClick={() => {
                 setStatus("working");
-                if (slots.length === 0) setSlots([{ start: "09:00", end: "18:00" }]);
+                if (slots.length === 0) {
+                  setSlots(
+                    selectedGroupId === "sleep"
+                      ? [{ start: "23:00", end: "07:00" }]
+                      : [{ start: "09:00", end: "18:00" }]
+                  );
+                }
               }}
             >
               Занят
@@ -149,7 +223,9 @@ export const DayOverrideModal: React.FC<DayOverrideModalProps> = ({
 
           {status !== "free" && (
             <div className="space-y-2 p-3 rounded-md border border-border">
-              <Label className="text-xs">Рабочие часы</Label>
+              <Label className="text-xs">
+                Интервалы времени ({currentGroup?.name || "Группа"})
+              </Label>
               {slots.map((slot, idx) => (
                 <div key={idx} className="flex items-center gap-2">
                   <TimeInput24
@@ -187,11 +263,18 @@ export const DayOverrideModal: React.FC<DayOverrideModalProps> = ({
                 type="button"
                 variant="ghost"
                 size="sm"
-                onClick={() => setSlots([...slots, { start: "18:00", end: "21:00" }])}
+                onClick={() =>
+                  setSlots([
+                    ...slots,
+                    selectedGroupId === "sleep"
+                      ? { start: "14:00", end: "16:00" }
+                      : { start: "18:00", end: "21:00" },
+                  ])
+                }
                 className="text-xs h-7 px-2"
               >
                 <Plus className="size-3.5 mr-1" />
-                Добавить слот
+                Добавить интервал
               </Button>
             </div>
           )}
@@ -202,7 +285,7 @@ export const DayOverrideModal: React.FC<DayOverrideModalProps> = ({
               id="day-note"
               value={note}
               onChange={(e) => setNote(e.target.value)}
-              placeholder="Комментарий..."
+              placeholder="Комментарий к этому дню..."
             />
           </div>
         </div>
@@ -218,7 +301,7 @@ export const DayOverrideModal: React.FC<DayOverrideModalProps> = ({
               className="text-muted-foreground"
             >
               <RotateCcw className="size-3.5 mr-1" />
-              Сбросить
+              Сбросить для «{currentGroup?.name}»
             </Button>
           ) : (
             <div />

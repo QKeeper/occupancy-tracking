@@ -47,6 +47,15 @@ export const styleSchema = z.object({
   symbol: z.string().max(2_000_000), iconScale: z.number().min(0.5).max(2.2).optional(),
   iconHistory: z.array(z.string().max(2_000_000)).max(15).optional(),
 }).strict();
+export const timelineGroupSchema = z.object({
+  id: z.string().min(1).max(64),
+  name: z.string().trim().min(1).max(64),
+  style: styleSchema,
+  schedule_config: scheduleSchema,
+  overrides: z.record(dateSchema, overrideSchema).optional(),
+  is_enabled: z.boolean().optional(),
+}).strict();
+export const timelineGroupsSchema = z.array(timelineGroupSchema).max(20);
 export const profileSchema = z.object({
   revision: revisionSchema,
   username: usernameSchema.optional(), display_name: z.string().trim().min(1).max(128).optional(),
@@ -55,4 +64,5 @@ export const profileSchema = z.object({
   banner_url: z.string().max(20_000_000).nullable().optional(),
   time_zone: timeZoneSchema.optional(),
   timeline_style: styleSchema.optional(), schedule_config: scheduleSchema.optional(),
+  timeline_groups: timelineGroupsSchema.optional(),
 }).strict();

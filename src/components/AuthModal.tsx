@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { TimelineStyleConfig, User } from "@/types";
+import { TimelineGroup, TimelineStyleConfig, User } from "@/types";
 import {
   Dialog,
   DialogContent,
@@ -31,6 +31,7 @@ import {
   DEFAULT_SCHEDULE_TIMEZONE,
   formatTimeZoneOptionLabel,
   getAvailableTimeZoneOptions,
+  getUserTimelineGroups,
   isValidTimeZone,
   normalizeTimeZone,
 } from "@/lib/schedule-engine";
@@ -163,6 +164,10 @@ export const ProfileCabinetModal: React.FC<ProfileCabinetModalProps> = ({
   const [timeZone, setTimeZone] = useState<string>(
     normalizeTimeZone(currentUser.time_zone || DEFAULT_SCHEDULE_TIMEZONE)
   );
+  const [timelineGroups, setTimelineGroups] = useState<TimelineGroup[]>(() =>
+    getUserTimelineGroups(currentUser)
+  );
+  const [selectedSkinGroupId, setSelectedSkinGroupId] = useState<string>("work");
   const [timelineStyle, setTimelineStyle] = useState<TimelineStyleConfig>({
     ...DEFAULT_TIMELINE_STYLE,
     ...(currentUser.timeline_style || {}),
@@ -343,6 +348,11 @@ export const ProfileCabinetModal: React.FC<ProfileCabinetModalProps> = ({
       iconHistory: updatedHistory,
     };
 
+    const updatedGroups = timelineGroups.map((g) =>
+      g.id === selectedSkinGroupId ? { ...g, style: finalTimelineStyle } : g
+    );
+    const workGroup = updatedGroups.find((g) => g.id === "work");
+
     setLoading(true);
     try {
       await onUpdateProfile({
@@ -351,7 +361,8 @@ export const ProfileCabinetModal: React.FC<ProfileCabinetModalProps> = ({
         time_zone: normalizeTimeZone(timeZone),
         avatar_url: avatarUrl,
         banner_url: bannerUrl,
-        timeline_style: finalTimelineStyle,
+        timeline_style: workGroup ? workGroup.style : finalTimelineStyle,
+        timeline_groups: updatedGroups,
       });
       toast.success("Настройки профиля сохранены");
       onOpenChange(false);
@@ -956,14 +967,63 @@ export const ProfileCabinetModal: React.FC<ProfileCabinetModalProps> = ({
                         Кастомизация таймлайна
                       </DialogTitle>
                       <DialogDescription className="text-xs">
-                        Настройте цвета и паттерн ваших рабочих диапазонов на общем графике
+                        Настройте цвета и паттерн для любой из ваших групп таймлайнов
                       </DialogDescription>
                     </div>
+
+                    {/* Выбор группы таймлайнов для кастомизации скина */}
+                    {timelineGroups.length > 1 && (
+                      <div className="space-y-1.5 pb-1">
+                        <Label className="text-xs text-muted-foreground">Группа таймлайнов:</Label>
+                        <div className="flex flex-wrap gap-1.5">
+                          {timelineGroups.map((g) => {
+                            const isSelected = g.id === selectedSkinGroupId;
+                            return (
+                              <button
+                                key={g.id}
+                                type="button"
+                                onClick={() => {
+                                  // Preserve changes of the currently edited group before switching
+                                  setTimelineGroups((prev) =>
+                                    prev.map((item) =>
+                                      item.id === selectedSkinGroupId
+                                        ? { ...item, style: timelineStyle }
+                                        : item
+                                    )
+                                  );
+                                  setSelectedSkinGroupId(g.id);
+                                  setTimelineStyle({
+                                    ...DEFAULT_TIMELINE_STYLE,
+                                    ...(g.style || {}),
+                                    iconScale: g.style?.iconScale ?? 1,
+                                    iconHistory: buildInitialIconHistory(
+                                      g.style?.iconHistory,
+                                      g.style?.symbol
+                                    ),
+                                  });
+                                }}
+                                className={`px-2.5 py-1 rounded-lg text-xs font-medium flex items-center gap-1.5 border transition-all cursor-pointer ${
+                                  isSelected
+                                    ? "border-primary bg-primary/10 text-foreground ring-1 ring-primary/40 shadow-xs"
+                                    : "border-border bg-card/60 text-muted-foreground hover:text-foreground"
+                                }`}
+                              >
+                                <span
+                                  className="size-2 rounded-full shrink-0"
+                                  style={{ backgroundColor: isSelected ? timelineStyle.bgColor : g.style.bgColor }}
+                                />
+                                <span>{g.name}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
 
                     {/* Живое превью диапазона на таймлайне */}
                     <div className="space-y-1">
                       <Label className="text-xs text-muted-foreground">
-                        Предпросмотр на таймлайне
+                        Предпросмотр на таймлайне ({timelineGroups.find((g) => g.id === selectedSkinGroupId)?.name || "Группа"})
                       </Label>
                       <div className="relative h-12 rounded-lg border border-border bg-background/60 overflow-hidden flex items-center px-4">
                         <div
@@ -971,13 +1031,13 @@ export const ProfileCabinetModal: React.FC<ProfileCabinetModalProps> = ({
                           className="h-full w-full border-x flex items-center gap-1.5 px-3 text-white shadow-xs"
                         >
                           <span className="text-[11px] font-mono font-medium drop-shadow-xs shrink-0">
-                            09:00
+                            {selectedSkinGroupId === "sleep" ? "23:00" : "09:00"}
                           </span>
                           <span className="text-[11px] font-medium truncate drop-shadow-xs">
-                            Смена / Работа
+                            {timelineGroups.find((g) => g.id === selectedSkinGroupId)?.name || "Смена / Работа"}
                           </span>
                           <span className="ml-auto text-[11px] font-mono font-medium drop-shadow-xs shrink-0">
-                            18:00
+                            {selectedSkinGroupId === "sleep" ? "07:00" : "18:00"}
                           </span>
                         </div>
                       </div>

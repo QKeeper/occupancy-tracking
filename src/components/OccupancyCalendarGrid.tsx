@@ -34,7 +34,7 @@ interface OccupancyCalendarGridProps {
   onToggleMemberFilter: (userId: number) => void;
   onSelectCombinationPreset: (ids: number[]) => void;
   onReorderMembers?: (newMemberIds: number[]) => void;
-  onCellClick: (user: User, date: Date) => void;
+  onCellClick: (user: User, date: Date, groupId?: string) => void;
   onOpenMySchedule: () => void;
   scrollCommand?: {
     type: "today" | "preserve-day" | "week-nav";
@@ -141,8 +141,11 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
   );
 
   const selectedUsers = useMemo(
-    () => members.filter((m) => selectedMemberIds.includes(m.id)),
-    [members, selectedMemberIds]
+    () =>
+      members
+        .filter((m) => selectedMemberIds.includes(m.id))
+        .map((m) => (m.id === currentUser.id ? { ...m, ...currentUser } : m)),
+    [members, selectedMemberIds, currentUser]
   );
 
   // Continuous common free windows across the entire multi-day timeline
@@ -155,12 +158,13 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
   const busyBlocksByMember = useMemo(() => {
     const map: Record<number, ReturnType<typeof layoutBusyBlocks>> = {};
     for (const m of members) {
+      const userToCompute = m.id === currentUser.id ? { ...m, ...currentUser } : m;
       map[m.id] = layoutBusyBlocks(
-        computeUserContinuousBusyBlocks(m, days, viewerTimeZone)
+        computeUserContinuousBusyBlocks(userToCompute, days, viewerTimeZone)
       );
     }
     return map;
-  }, [members, days, viewerTimeZone]);
+  }, [members, currentUser, days, viewerTimeZone]);
 
   // Generate each member's pattern once, rather than once per busy block/render.
   const blockStylesByMember = useMemo(() => {
@@ -905,7 +909,7 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
                               <div
                                 onClick={() => {
                                   if (isMe && !hasDraggedRef.current) {
-                                    onCellClick(member, block.sourceDate || blockDay);
+                                    onCellClick(member, block.sourceDate || blockDay, block.groupId);
                                   }
                                 }}
                                 style={{
@@ -913,7 +917,9 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
                                   width: `${widthPx}px`,
                                   top: `${(block.lane / block.laneCount) * 100}%`,
                                   height: `${100 / block.laneCount}%`,
-                                  ...blockStylesByMember[member.id],
+                                  ...(block.style
+                                    ? getTimelineBlockStyle(block.style)
+                                    : blockStylesByMember[member.id]),
                                 }}
                                 className={`absolute z-10 rounded-[2px] flex items-center gap-1.5 px-1.5 overflow-clip text-white ${
                                   isDraggingTimeline
@@ -928,11 +934,9 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
                                     <span className="text-[10px] font-mono font-medium leading-none shrink-0">
                                       {block.startTimeLabel}
                                     </span>
-                                    {block.note && (
-                                      <span className="sticky left-1.5 text-[10px] font-medium truncate opacity-95">
-                                        {block.note}
-                                      </span>
-                                    )}
+                                    <span className="sticky left-1.5 text-[10px] font-medium truncate opacity-95">
+                                      {block.note || block.groupName}
+                                    </span>
                                     <span className="ml-auto text-[10px] font-mono font-medium leading-none shrink-0 pl-1">
                                       {block.endTimeLabel}
                                     </span>
@@ -940,15 +944,20 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
                                 ) : (
                                   widthPx >= 34 && (
                                     <span className="sticky left-1 text-[9px] font-mono font-medium leading-none truncate">
-                                      {block.note || block.startTimeLabel}
+                                      {block.note || block.groupName || block.startTimeLabel}
                                     </span>
                                   )
                                 )}
                               </div>
                             </TooltipTrigger>
                             <TooltipContent>
-                              <div className="font-medium">
-                                {member.display_name.replace(" (Вы)", "")}
+                              <div className="font-medium flex items-center gap-1.5">
+                                <span>{member.display_name.replace(" (Вы)", "")}</span>
+                                {block.groupName && (
+                                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground font-normal">
+                                    {block.groupName}
+                                  </span>
+                                )}
                               </div>
                               <div className="font-mono text-[11px]">
                                 {block.startTimeLabel} – {block.endTimeLabel}

@@ -4,7 +4,35 @@ import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [
+    react(),
+    tailwindcss(),
+    {
+      name: "redirect-to-production",
+      configureServer(server) {
+        server.middlewares.use((req, res, next) => {
+          const host = (req.headers.host || "").toLowerCase();
+          if (!host.includes("localhost") && !host.includes("127.0.0.1") && !host.includes("schedule.ssdk.dev")) {
+            const url = req.url || "/";
+            const pathname = url.split("?")[0];
+            const isInternal =
+              pathname.startsWith("/@") ||
+              pathname.startsWith("/node_modules") ||
+              pathname.startsWith("/src") ||
+              pathname.startsWith("/api") ||
+              pathname.startsWith("/uploads");
+            if (!isInternal && (pathname === "/" || req.headers.accept?.includes("text/html"))) {
+              res.statusCode = 302;
+              res.setHeader("Location", `https://schedule.ssdk.dev${url}`);
+              res.end();
+              return;
+            }
+          }
+          next();
+        });
+      },
+    },
+  ],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
