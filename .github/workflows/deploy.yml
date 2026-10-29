@@ -88,5 +88,7 @@ jobs:
             APP_PATH="${APP_PATH:-/var/www/schedule.ssdk.dev}"
             echo "Connecting to application directory: $APP_PATH"
             cd "$APP_PATH"
+            git fetch origin main
+            git reset --hard origin/main
             chmod +x deploy.sh
             ./deploy.sh
