@@ -176,6 +176,7 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
   }>>([]);
 
   // Modal for configuring newly created range
+  const isCreateModalOpenRef = useRef(false);
   const [createModalState, setCreateModalState] = useState<{
     open: boolean;
     date: Date | null;
@@ -188,6 +189,7 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
     initialEnd: "10:00",
   });
 
+  isCreateModalOpenRef.current = createModalState.open;
   const suppressCellClickRef = useRef(false);
 
   // Vertical-only drag-and-drop state for reordering members
@@ -338,7 +340,10 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
 
   const handleCellMouseDown = (e: React.MouseEvent, day: Date, dayIndex: number) => {
     if (e.button !== 0) return;
+    e.stopPropagation();
     stopInertia();
+    isPointerDownRef.current = false;
+    setIsDraggingTimeline(false);
     const scroller = scrollContainerRef.current;
     if (!scroller) return;
     const rect = scroller.getBoundingClientRect();
@@ -529,6 +534,7 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
     };
 
     const handleMouseMove = (e: MouseEvent) => {
+      if (isCreateModalOpenRef.current) return;
       const mDrag = memberDragRef.current;
       if (mDrag) {
         const rawDeltaY = e.clientY - mDrag.startY;
@@ -685,6 +691,8 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
       const mDrag = memberDragRef.current;
       if (mDrag) {
         memberDragRef.current = null;
+        isPointerDownRef.current = false;
+        setIsDraggingTimeline(false);
         if (mDrag.hasMoved) {
           suppressMemberClickRef.current = true;
           const { startIndex, targetIndex, memberIds } = mDrag;
@@ -708,6 +716,8 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
       if (rSess) {
         resizeSessionRef.current = null;
         setResizingState(null);
+        isPointerDownRef.current = false;
+        setIsDraggingTimeline(false);
         suppressCellClickRef.current = true;
         setTimeout(() => {
           suppressCellClickRef.current = false;
@@ -852,6 +862,8 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
       const cSess = dragCreateSessionRef.current;
       if (cSess) {
         dragCreateSessionRef.current = null;
+        isPointerDownRef.current = false;
+        setIsDraggingTimeline(false);
         const finalRange = dragCreateRangeRef.current;
         dragCreateRangeRef.current = null;
         setDragCreateRange(null);
