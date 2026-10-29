@@ -1,9 +1,25 @@
 import path from "path";
+import fs from "fs";
+import { execSync } from "child_process";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
+let buildNumber = process.env.BUILD_NUMBER || process.env.GITHUB_RUN_NUMBER || "";
+if (!buildNumber) {
+  try {
+    buildNumber = execSync("git rev-list --count HEAD").toString().trim();
+  } catch {
+    buildNumber = "1";
+  }
+}
+const pkg = JSON.parse(fs.readFileSync(path.resolve(__dirname, "package.json"), "utf8"));
+const appVersion = `${pkg.version}.${buildNumber}`;
+
 export default defineConfig({
+  define: {
+    __APP_VERSION__: JSON.stringify(appVersion),
+  },
   plugins: [
     react(),
     tailwindcss(),

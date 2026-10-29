@@ -6,7 +6,15 @@ import React, {
   useState,
   useCallback,
 } from "react";
-import { User } from "@/types";
+import { User, DayOverride, TimeSlot } from "@/types";
+import { CreateTimeRangeModal } from "@/components/CreateTimeRangeModal";
+import { toast } from "sonner";
+import {
+  addSlotToGroupOnDate,
+  resizeSlotInGroupOnDate,
+  getUserTimelineGroups,
+  minutesToTime,
+} from "@/lib/schedule-engine";
 import {
   DEFAULT_SCHEDULE_TIMEZONE,
   computeContinuousFreeOverlap,
@@ -42,6 +50,25 @@ interface OccupancyCalendarGridProps {
     seq: number;
   };
   onScrollDayOffsetChange?: (dayOffset: number) => void;
+  onSaveDayOverride?: (
+    userId: number,
+    dateStr: string,
+    override: DayOverride | null,
+    expectedOverride?: DayOverride | null,
+    groupId?: string
+  ) => Promise<void>;
+}
+
+
+function deltaToSlotEnd(deltaMins: number): string {
+  if (deltaMins <= 0) return "00:00";
+  if (deltaMins === 1440) return "24:00";
+  if (deltaMins > 1440) {
+    const nextDayMins = deltaMins - 1440;
+    if (nextDayMins === 1440) return "24:00";
+    return minutesToTime(nextDayMins % 1440);
+  }
+  return minutesToTime(deltaMins);
 }
 
 const HOURS_24 = Array.from({ length: 24 }, (_, i) => i);
@@ -64,6 +91,7 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
   onOpenMySchedule,
   scrollCommand,
   onScrollDayOffsetChange,
+  onSaveDayOverride,
 }) => {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const minimapRef = useRef<HTMLDivElement>(null);
@@ -99,6 +127,67 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
 
   // Viewport tracking for the VSCode-style minimap
   const isDraggingMinimapRef = useRef(false);
+
+  // Resizing state for existing blocks on currentUser row
+  const [resizingState, setResizingState] = useState<{
+    block: any;
+    edge: "start" | "end";
+    startClientX: number;
+    origStartMin: number;
+    origEndMin: number;
+    currentStartMin: number;
+    currentEndMin: number;
+    dayStartMin: number;
+    } | null>(null);
+  const resizeSessionRef = useRef<{
+    block: any;
+    edge: "start" | "end";
+    startClientX: number;
+    origStartMin: number;
+    origEndMin: number;
+    currentStartMin: number;
+    currentEndMin: number;
+    dayStartMin: number;
+    } | null>(null);
+
+  // Drag-to-create state on empty space on currentUser row
+  const dragCreateSessionRef = useRef<{
+    startX: number;
+    startY: number;
+    anchorMin: number;
+    currentMin: number;
+    day: Date;
+    dayIndex: number;
+    hasMoved: boolean;
+  } | null>(null);
+  const dragCreateRangeRef = useRef<{ startMin: number; endMin: number; day: Date } | null>(null);
+  const [dragCreateRange, setDragCreateRange] = useState<{
+    startMin: number;
+    endMin: number;
+    day: Date;
+  } | null>(null);
+
+  // Optimistic override for instant resize/create updates without server roundtrip lag
+  const [optimisticOverride, setOptimisticOverride] = useState<{
+    dateStr: string;
+    groupId: string;
+    override: DayOverride;
+  } | null>(null);
+
+  // Modal for configuring newly created range
+  const [createModalState, setCreateModalState] = useState<{
+    open: boolean;
+    date: Date | null;
+    initialStart: string;
+    initialEnd: string;
+  }>({
+    open: false,
+    date: null,
+    initialStart: "09:00",
+    initialEnd: "10:00",
+  });
+
+  const suppressCellClickRef = useRef(false);
 
   // Vertical-only drag-and-drop state for reordering members
   const [memberDragState, setMemberDragState] = useState<{
@@ -158,13 +247,35 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
   const busyBlocksByMember = useMemo(() => {
     const map: Record<number, ReturnType<typeof layoutBusyBlocks>> = {};
     for (const m of members) {
-      const userToCompute = m.id === currentUser.id ? { ...m, ...currentUser } : m;
+      let userToCompute = m.id === currentUser.id ? { ...m, ...currentUser } : m;
+      if (m.id === currentUser.id && optimisticOverride) {
+        const { dateStr, groupId, override } = optimisticOverride;
+        const groups = getUserTimelineGroups(userToCompute);
+        const updatedGroups = groups.map((g) => {
+          if (g.id !== groupId) return g;
+          return {
+            ...g,
+            overrides: {
+              ...(g.overrides || {}),
+              [dateStr]: override,
+            },
+          };
+        });
+        userToCompute = {
+          ...userToCompute,
+          overrides: {
+            ...(userToCompute.overrides || {}),
+            [dateStr]: override,
+          },
+          timeline_groups: updatedGroups,
+        };
+      }
       map[m.id] = layoutBusyBlocks(
         computeUserContinuousBusyBlocks(userToCompute, days, viewerTimeZone)
       );
     }
     return map;
-  }, [members, currentUser, days, viewerTimeZone]);
+  }, [members, currentUser, days, viewerTimeZone, optimisticOverride]);
 
   // Generate each member's pattern once, rather than once per busy block/render.
   const blockStylesByMember = useMemo(() => {
@@ -182,6 +293,60 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
   });
 
   const minToPx = (mins: number) => (mins / 60) * hourWidth;
+
+  const formatDuration = (mins: number): string => {
+    const h = Math.floor(mins / 60);
+    const m = mins % 60;
+    if (h > 0 && m > 0) return `${h} ч ${m} мин`;
+    if (h > 0) return `${h} ч`;
+    return `${m} мин`;
+  };
+
+  const handleStartResize = (
+    e: React.MouseEvent,
+    block: any,
+    edge: "start" | "end"
+  ) => {
+    e.stopPropagation();
+    e.preventDefault();
+    stopInertia();
+    suppressCellClickRef.current = true;
+    const dayIdx = Math.floor(block.startMin / 1440);
+    const dayStartMin = dayIdx * 1440;
+    const session = {
+      block,
+      edge,
+      startClientX: e.clientX,
+      origStartMin: block.startMin,
+      origEndMin: block.endMin,
+      currentStartMin: block.startMin,
+      currentEndMin: block.endMin,
+      dayStartMin,
+    };
+    resizeSessionRef.current = session;
+    setResizingState(session);
+  };
+
+  const handleCellMouseDown = (e: React.MouseEvent, day: Date, dayIndex: number) => {
+    if (e.button !== 0) return;
+    stopInertia();
+    const scroller = scrollContainerRef.current;
+    if (!scroller) return;
+    const rect = scroller.getBoundingClientRect();
+    const clickX = e.clientX - rect.left + scroller.scrollLeft;
+    const clickMin = Math.max(0, Math.min(totalMinutes, (clickX / hourWidth) * 60));
+    const snap15 = (m: number) => Math.round(m / 15) * 15;
+    const snapped = snap15(clickMin);
+    dragCreateSessionRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      anchorMin: snapped,
+      currentMin: snapped,
+      day,
+      dayIndex,
+      hasMoved: false,
+    };
+  };
 
   const nowInTz = getNowInTimeZone(viewerTimeZone);
   const nowOffsetPx = minToPx(nowInTz.totalMinutes);
@@ -400,6 +565,67 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
         return;
       }
 
+      // 1. Live resize existing block
+      const rSess = resizeSessionRef.current;
+      if (rSess) {
+        const deltaPx = e.clientX - rSess.startClientX;
+        const deltaMins = Math.round((deltaPx / hourWidth) * 60);
+        const snap15 = (m: number) => Math.round(m / 15) * 15;
+        const totalTimelineMinutes = (totalTimelineWidth / hourWidth) * 60;
+        if (rSess.edge === "start") {
+          let nextStart = snap15(rSess.origStartMin + deltaMins);
+          nextStart = Math.min(
+            rSess.currentEndMin - 30,
+            Math.min(rSess.dayStartMin + 1410, Math.max(rSess.dayStartMin, Math.max(rSess.currentEndMin - 1440, nextStart)))
+          );
+          rSess.currentStartMin = nextStart;
+        } else {
+          let nextEnd = snap15(rSess.origEndMin + deltaMins);
+          nextEnd = Math.max(
+            rSess.currentStartMin + 30,
+            Math.min(rSess.currentStartMin + 1440, Math.min(totalTimelineMinutes, nextEnd))
+          );
+          rSess.currentEndMin = nextEnd;
+        }
+        setResizingState({ ...rSess });
+        return;
+      }
+
+      // 2. Drag-to-create on empty timeline space
+      const cSess = dragCreateSessionRef.current;
+      if (cSess) {
+        const dx = Math.abs(e.clientX - cSess.startX);
+        if (!cSess.hasMoved && dx > 4) {
+          cSess.hasMoved = true;
+          isPointerDownRef.current = false;
+        }
+        if (cSess.hasMoved) {
+          const scroller = scrollContainerRef.current;
+          if (scroller) {
+            const rect = scroller.getBoundingClientRect();
+            const clickX = e.clientX - rect.left + scroller.scrollLeft;
+            const clickMin = Math.max(0, Math.min(totalTimelineWidth / hourWidth * 60, (clickX / hourWidth) * 60));
+            const snap15 = (m: number) => Math.round(m / 15) * 15;
+            const snapped = snap15(clickMin);
+            cSess.currentMin = snapped;
+            let startMin = Math.min(cSess.anchorMin, snapped);
+            let endMin = Math.max(cSess.anchorMin, snapped);
+            if (endMin - startMin < 30) {
+              if (snapped >= cSess.anchorMin) endMin = startMin + 30;
+              else startMin = endMin - 30;
+            }
+            if (endMin - startMin > 1440) {
+              if (snapped >= cSess.anchorMin) endMin = startMin + 1440;
+              else startMin = endMin - 1440;
+            }
+            const range = { startMin, endMin, day: cSess.day };
+            dragCreateRangeRef.current = range;
+            setDragCreateRange(range);
+          }
+        }
+        return;
+      }
+
       if (!isPointerDownRef.current) return;
       const scroller = scrollContainerRef.current;
       if (!scroller) return;
@@ -444,6 +670,85 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
 
       if (isDraggingMinimapRef.current) {
         isDraggingMinimapRef.current = false;
+      }
+
+      // 1. Handle resize mouse up
+      const rSess = resizeSessionRef.current;
+      if (rSess) {
+        resizeSessionRef.current = null;
+        setResizingState(null);
+        suppressCellClickRef.current = true;
+        setTimeout(() => {
+          suppressCellClickRef.current = false;
+        }, 400);
+        if (
+          rSess.currentStartMin !== rSess.origStartMin ||
+          rSess.currentEndMin !== rSess.origEndMin
+        ) {
+          const newStart = minutesToTime(rSess.currentStartMin - rSess.dayStartMin);
+          const endDelta = rSess.currentEndMin - rSess.dayStartMin;
+          const newEnd = deltaToSlotEnd(endDelta);
+          if (onSaveDayOverride) {
+            const dateStr = format(rSess.block.sourceDate, "yyyy-MM-dd");
+            const { slots, expectedOverride, status, note } = resizeSlotInGroupOnDate(
+              currentUser,
+              rSess.block.groupId,
+              rSess.block.sourceDate,
+              { start: rSess.block.startTimeLabel, end: rSess.block.endTimeLabel },
+              { start: newStart, end: newEnd }
+            );
+            const overridePayload: DayOverride = { status, slots, note };
+            setOptimisticOverride({
+              dateStr,
+              groupId: rSess.block.groupId,
+              override: overridePayload,
+            });
+            onSaveDayOverride(
+              currentUser.id,
+              dateStr,
+              overridePayload,
+              expectedOverride,
+              rSess.block.groupId
+            )
+              .catch((err) => {
+                toast.error(err.message || "Ошибка обновления интервала");
+              })
+              .finally(() => {
+                setOptimisticOverride(null);
+              });
+          }
+        }
+        return;
+      }
+
+      // 2. Handle drag-to-create mouse up
+      const cSess = dragCreateSessionRef.current;
+      if (cSess) {
+        dragCreateSessionRef.current = null;
+        const finalRange = dragCreateRangeRef.current;
+        dragCreateRangeRef.current = null;
+        setDragCreateRange(null);
+        if (cSess.hasMoved && finalRange) {
+          suppressCellClickRef.current = true;
+          setTimeout(() => {
+            suppressCellClickRef.current = false;
+          }, 300);
+          const dayIdx = Math.floor(finalRange.startMin / 1440);
+          const targetDay = days[dayIdx] || cSess.day;
+          const dayStartMin = dayIdx * 1440;
+          const startStr = minutesToTime(Math.max(0, finalRange.startMin - dayStartMin));
+          const endDelta = finalRange.endMin - dayStartMin;
+          const endStr = deltaToSlotEnd(endDelta);
+          setCreateModalState({
+            open: true,
+            date: targetDay,
+            initialStart: startStr,
+            initialEnd: endStr,
+          });
+        } else if (!cSess.hasMoved && !suppressCellClickRef.current) {
+          onCellClick(currentUser, cSess.day);
+        }
+        return;
       }
 
       if (!isPointerDownRef.current) return;
@@ -746,7 +1051,7 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
             >
               {/* ШАПКА ТАЙМЛАЙНА: Горизонтальная шкала дней и часов (h-[52px]) */}
               <div className="flex h-[52px] border-b border-border bg-muted/30 shrink-0">
-                {days.map((day) => {
+                {days.map((day, dIdx) => {
                   const dateStr = format(day, "yyyy-MM-dd");
                   const today = isDayToday(day);
                   const weekend = isWeekend(day);
@@ -832,15 +1137,15 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
                     >
                       {/* Слой 1: Сетка дней и часов (кликабельно ТОЛЬКО для своей строки isMe при отсутствии перетаскивания) */}
                       <div className="absolute inset-0 flex">
-                        {days.map((day) => {
+                        {days.map((day, dIdx) => {
                           const dateStr = format(day, "yyyy-MM-dd");
                           const today = isDayToday(day);
                           return (
                             <div
                               key={dateStr}
-                              onClick={() => {
-                                if (isMe && !hasDraggedRef.current) {
-                                  onCellClick(member, day);
+                              onMouseDown={(e) => {
+                                if (isMe) {
+                                  handleCellMouseDown(e, day, dIdx);
                                 }
                               }}
                               style={{
@@ -852,7 +1157,7 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
                                 isDraggingTimeline
                                   ? "cursor-grabbing"
                                   : isMe
-                                  ? "cursor-pointer hover:bg-white/[0.02]"
+                                  ? "cursor-crosshair hover:bg-white/[0.03]"
                                   : "cursor-grab"
                               }`}
                             >
@@ -895,19 +1200,30 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
 
                       {/* Слой 3: Отдельные интервалы, пересечения на разных уровнях */}
                       {busyBlocks.map((block, bIdx) => {
-                        const leftPx = minToPx(block.startMin);
-                        const widthPx = Math.max(4, minToPx(block.endMin - block.startMin));
+                        const isBeingResized = resizingState?.block === block;
+                        const effectiveStartMin = isBeingResized ? resizingState.currentStartMin : block.startMin;
+                        const effectiveEndMin = isBeingResized ? resizingState.currentEndMin : block.endMin;
+                        const leftPx = minToPx(effectiveStartMin);
+                        const widthPx = Math.max(6, minToPx(effectiveEndMin - effectiveStartMin));
                         const dayIndex = Math.min(
                           days.length - 1,
-                          Math.floor(block.startMin / 1440)
+                          Math.floor(effectiveStartMin / 1440)
                         );
                         const blockDay = days[dayIndex];
+                        const currentStartLabel = minutesToTime(effectiveStartMin % 1440);
+                        const sDayIdx = Math.floor(effectiveStartMin / 1440);
+                        const eDelta = effectiveEndMin - sDayIdx * 1440;
+                        const isCrossMidnight = eDelta > 1440;
+                        const baseEndLabel = deltaToSlotEnd(eDelta);
+                        const currentEndLabel = isCrossMidnight && isBeingResized ? `${baseEndLabel} (+1)` : baseEndLabel;
+                        const durationMins = effectiveEndMin - effectiveStartMin;
 
                         return (
-                          <Tooltip key={bIdx}>
+                          <Tooltip key={bIdx} open={isBeingResized ? false : undefined}>
                             <TooltipTrigger asChild>
                               <div
                                 onClick={() => {
+                                  if (suppressCellClickRef.current || isBeingResized) return;
                                   if (isMe && !hasDraggedRef.current) {
                                     onCellClick(member, block.sourceDate || blockDay, block.groupId);
                                   }
@@ -921,32 +1237,89 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
                                     ? getTimelineBlockStyle(block.style)
                                     : blockStylesByMember[member.id]),
                                 }}
-                                className={`absolute z-10 rounded-[2px] flex items-center gap-1.5 px-1.5 overflow-clip text-white ${
-                                  isDraggingTimeline
-                                    ? "cursor-grabbing "
+                                className={`group/block absolute rounded-[2px] flex items-center gap-1.5 px-1.5 text-white ${
+                                  isBeingResized
+                                    ? "z-40 ring-2 ring-white shadow-xl cursor-ew-resize"
+                                    : isDraggingTimeline
+                                    ? "z-10 cursor-grabbing overflow-clip"
                                     : isMe
-                                    ? "cursor-pointer hover:brightness-110 "
-                                    : "cursor-grab "
+                                    ? "z-10 cursor-pointer hover:brightness-110"
+                                    : "z-10 cursor-grab overflow-clip"
                                 }`}
                               >
-                                {widthPx >= 64 ? (
-                                  <>
-                                    <span className="text-[10px] font-mono font-medium leading-none shrink-0">
-                                      {block.startTimeLabel}
+                                {/* Плавающий бейдж текущего времени при растягивании/сужении */}
+                                {isBeingResized && (
+                                  <div className="absolute -top-7 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded bg-zinc-900/95 text-white text-[10px] font-mono whitespace-nowrap shadow-lg border border-white/20 pointer-events-none z-50 flex items-center gap-1.5">
+                                    <span className="font-semibold text-primary">{currentStartLabel} – {currentEndLabel}</span>
+                                    <span className="text-zinc-300">({formatDuration(durationMins)})</span>
+                                  </div>
+                                )}
+
+                                {/* Левый край для изменения времени начала (только для своей строки) */}
+                                {isMe && (
+                                  <div
+                                    data-testid="block-resize-start"
+                                    onMouseDown={(e) => handleStartResize(e, block, "start")}
+                                    onClick={(e) => { e.stopPropagation(); e.preventDefault(); }}
+                                    className="absolute left-0 top-0 bottom-0 w-3.5 -ml-1 z-20 cursor-ew-resize group/handle-start flex items-center justify-start select-none"
+                                    title="Потяните, чтобы изменить время начала (мин. 30 мин)"
+                                  >
+                                    <div
+                                      className={`h-full rounded-l transition-all duration-150 ${
+                                        isBeingResized && resizingState?.edge === "start"
+                                          ? "w-2 bg-white shadow-[0_0_10px_rgba(255,255,255,1)] ring-1 ring-primary opacity-100"
+                                          : "w-1.5 bg-white shadow-[0_0_8px_rgba(255,255,255,0.9)] opacity-0 group-hover/handle-start:opacity-100"
+                                      }`}
+                                    />
+                                  </div>
+                                )}
+
+                                {durationMins < 120 ? (
+                                  <div className="flex flex-col justify-center leading-tight overflow-hidden pointer-events-none w-full">
+                                    <span className="text-[10px] font-mono font-medium leading-tight truncate">
+                                      {formatDuration(durationMins)}
                                     </span>
-                                    <span className="sticky left-1.5 text-[10px] font-medium truncate opacity-95">
+                                    {(block.note || block.groupName) && (
+                                      <span className="text-[10px] font-medium leading-tight truncate opacity-90">
+                                        {block.note || block.groupName}
+                                      </span>
+                                    )}
+                                  </div>
+                                ) : widthPx >= 64 ? (
+                                  <>
+                                    <span className="text-[10px] font-mono font-medium leading-none shrink-0 pointer-events-none">
+                                      {currentStartLabel}
+                                    </span>
+                                    <span className="sticky left-1.5 text-[10px] font-medium truncate opacity-95 pointer-events-none">
                                       {block.note || block.groupName}
                                     </span>
-                                    <span className="ml-auto text-[10px] font-mono font-medium leading-none shrink-0 pl-1">
-                                      {block.endTimeLabel}
+                                    <span className="ml-auto text-[10px] font-mono font-medium leading-none shrink-0 pl-1 pointer-events-none">
+                                      {currentEndLabel}
                                     </span>
                                   </>
                                 ) : (
-                                  widthPx >= 34 && (
-                                    <span className="sticky left-1 text-[9px] font-mono font-medium leading-none truncate">
-                                      {block.note || block.groupName || block.startTimeLabel}
-                                    </span>
-                                  )
+                                  <span className="sticky left-1 text-[10px] font-mono font-medium leading-none truncate pointer-events-none">
+                                    {block.note || block.groupName || currentStartLabel}
+                                  </span>
+                                )}
+
+                                {/* Правый край для изменения времени окончания (только для своей строки) */}
+                                {isMe && (
+                                  <div
+                                    data-testid="block-resize-end"
+                                    onMouseDown={(e) => handleStartResize(e, block, "end")}
+                                    onClick={(e) => { e.stopPropagation(); e.preventDefault(); }}
+                                    className="absolute right-0 top-0 bottom-0 w-3.5 -mr-1 z-20 cursor-ew-resize group/handle-end flex items-center justify-end select-none"
+                                    title="Потяните, чтобы изменить время окончания (мин. 30 мин)"
+                                  >
+                                    <div
+                                      className={`h-full rounded-r transition-all duration-150 ${
+                                        isBeingResized && resizingState?.edge === "end"
+                                          ? "w-2 bg-white shadow-[0_0_10px_rgba(255,255,255,1)] ring-1 ring-primary opacity-100"
+                                          : "w-1.5 bg-white shadow-[0_0_8px_rgba(255,255,255,0.9)] opacity-0 group-hover/handle-end:opacity-100"
+                                      }`}
+                                    />
+                                  </div>
                                 )}
                               </div>
                             </TooltipTrigger>
@@ -969,6 +1342,29 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
                           </Tooltip>
                         );
                       })}
+                      {/* Слой 4: Создание нового интервала при протягивании курсора на пустом месте */}
+                      {isMe && dragCreateRange && (
+                        <div
+                          style={{
+                            left: `${minToPx(dragCreateRange.startMin)}px`,
+                            width: `${minToPx(dragCreateRange.endMin - dragCreateRange.startMin)}px`,
+                          }}
+                          className="absolute top-1 bottom-1 z-30 rounded-[3px] bg-primary/20 border-2 border-primary border-dashed shadow-md flex items-center justify-between px-1.5 text-primary pointer-events-none select-none backdrop-blur-[0.5px] overflow-hidden"
+                        >
+                          <span className="text-[10px] font-mono font-semibold bg-background/95 px-1.5 py-0.5 rounded border border-primary/40 shadow-xs shrink-0 whitespace-nowrap">
+                            {minutesToTime(dragCreateRange.startMin % 1440)}
+                          </span>
+                          <span className="text-[10px] font-mono font-semibold bg-background/95 px-1.5 py-0.5 rounded border border-primary/40 shadow-xs shrink-0 whitespace-nowrap">
+                            {(() => {
+                              const sDayIdx = Math.floor(dragCreateRange.startMin / 1440);
+                              const eDelta = dragCreateRange.endMin - sDayIdx * 1440;
+                              const isNextDay = eDelta > 1440;
+                              const label = deltaToSlotEnd(eDelta);
+                              return isNextDay ? `${label} (+1)` : label;
+                            })()}
+                          </span>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -1098,6 +1494,49 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
             </div>
           </div>
         </div>
+        {createModalState.open && (
+          <CreateTimeRangeModal
+            open={createModalState.open}
+            onOpenChange={(open) =>
+              setCreateModalState((prev) => ({ ...prev, open }))
+            }
+            user={currentUser}
+            date={createModalState.date}
+            initialStart={createModalState.initialStart}
+            initialEnd={createModalState.initialEnd}
+            onSave={async (dateStr, slot, groupId, note) => {
+              if (!onSaveDayOverride) return;
+              const targetDay =
+                createModalState.date ||
+                days.find((d) => format(d, "yyyy-MM-dd") === dateStr) ||
+                new Date(dateStr);
+              const { slots, expectedOverride, status, note: finalNote } = addSlotToGroupOnDate(
+                currentUser,
+                groupId,
+                targetDay,
+                slot,
+                note
+              );
+              const overridePayload: DayOverride = { status, slots, note: finalNote };
+              setOptimisticOverride({
+                dateStr,
+                groupId,
+                override: overridePayload,
+              });
+              try {
+                await onSaveDayOverride(
+                  currentUser.id,
+                  dateStr,
+                  overridePayload,
+                  expectedOverride,
+                  groupId
+                );
+              } finally {
+                setOptimisticOverride(null);
+              }
+            }}
+          />
+        )}
       </div>
     </TooltipProvider>
   );

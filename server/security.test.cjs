@@ -485,6 +485,33 @@ test('sessions, password migration, permissions, validation and concurrent saves
       const afterResetMe=(await call('GET','/api/auth/me',undefined,a.cookies)).data;
       const sleepAfterReset=afterResetMe.timeline_groups.find(g=>g.id==='sleep');
       assert.equal(sleepAfterReset.overrides['2026-11-10'],undefined);
+
+      // Single event without an existing group (targetGroupId = "events")
+      const singleEventRes = await call('PUT', `/api/users/${a.data.id}/overrides/2026-11-12`, {
+        expectedOverride: null,
+        groupId: 'events',
+        override: { status: 'partial', slots: [{ start: '14:00', end: '16:30' }], note: 'Визит к врачу' }
+      }, a.cookies);
+      assert.equal(singleEventRes.status, 200);
+      const meWithEvents = (await call('GET', '/api/auth/me', undefined, a.cookies)).data;
+      const eventsGroup = meWithEvents.timeline_groups.find(g => g.id === 'events');
+      assert.ok(eventsGroup, 'events group should be auto-created');
+      assert.equal(eventsGroup.name, 'Без категории');
+      assert.equal(eventsGroup.overrides['2026-11-12'].slots[0].start, '14:00');
+      assert.equal(eventsGroup.overrides['2026-11-12'].slots[0].end, '16:30');
+      assert.equal(eventsGroup.overrides['2026-11-12'].note, 'Визит к врачу');
+
+      // Resize single event to 14:30 - 17:00
+      const resizeRes = await call('PUT', `/api/users/${a.data.id}/overrides/2026-11-12`, {
+        expectedOverride: { status: 'partial', slots: [{ start: '14:00', end: '16:30' }], note: 'Визит к врачу' },
+        groupId: 'events',
+        override: { status: 'partial', slots: [{ start: '14:30', end: '17:00' }], note: 'Визит к врачу' }
+      }, a.cookies);
+      assert.equal(resizeRes.status, 200);
+      const meAfterResize = (await call('GET', '/api/auth/me', undefined, a.cookies)).data;
+      const eventsAfterResize = meAfterResize.timeline_groups.find(g => g.id === 'events');
+      assert.equal(eventsAfterResize.overrides['2026-11-12'].slots[0].start, '14:30');
+      assert.equal(eventsAfterResize.overrides['2026-11-12'].slots[0].end, '17:00');
     });
     await t.test('feedback tickets can be created with tags, liked, commented, and deleted by owner or admin',async()=>{
       const bUser = await call('POST','/api/auth/login',{username:'member_user',password:secret});

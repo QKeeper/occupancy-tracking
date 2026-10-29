@@ -1,5 +1,6 @@
 import {
   ComputedDaySchedule,
+  DayOverride,
   DayWeeklySchedule,
   ScheduleConfig,
   TimeSlot,
@@ -932,3 +933,105 @@ export function computeContinuousFreeOverlap(
   return free;
 }
 
+
+
+export function resizeSlotInGroupOnDate(
+  user: User,
+  groupId: string,
+  targetDate: Date,
+  oldSlot: { start: string; end: string },
+  newSlot: { start: string; end: string }
+): {
+  slots: TimeSlot[];
+  expectedOverride: DayOverride | null;
+  status: "working" | "partial";
+  note?: string;
+} {
+  const groups = getUserTimelineGroups(user);
+  const group = groups.find((g) => g.id === groupId);
+  const dateStr = format(targetDate, "yyyy-MM-dd");
+  const existingOverride = group?.overrides?.[dateStr] ?? null;
+
+  let existingSlots: TimeSlot[] = [];
+  let note = existingOverride?.note;
+
+  if (existingOverride) {
+    existingSlots = Array.isArray(existingOverride.slots)
+      ? existingOverride.slots.map((s) => ({ ...s }))
+      : [];
+  } else if (group) {
+    const userTz = normalizeTimeZone(user.time_zone || DEFAULT_SCHEDULE_TIMEZONE);
+    const sched = getRawGroupDaySchedule(group, targetDate, userTz);
+    existingSlots = Array.isArray(sched.slots) ? sched.slots.map((s) => ({ ...s })) : [];
+    note = sched.note;
+  }
+
+  let matchedIdx = existingSlots.findIndex(
+    (s) => s.start === oldSlot.start && s.end === oldSlot.end
+  );
+  if (matchedIdx === -1) {
+    matchedIdx = existingSlots.findIndex((s) => s.start === oldSlot.start);
+  }
+  if (matchedIdx === -1) {
+    matchedIdx = 0;
+  }
+
+  if (matchedIdx >= 0 && matchedIdx < existingSlots.length) {
+    existingSlots[matchedIdx] = { start: newSlot.start, end: newSlot.end };
+  } else {
+    existingSlots.push({ start: newSlot.start, end: newSlot.end });
+  }
+
+  existingSlots.sort((a, b) => timeToMinutes(a.start) - timeToMinutes(b.start));
+
+  return {
+    slots: existingSlots,
+    expectedOverride: existingOverride,
+    status: "partial",
+    note,
+  };
+}
+
+export function addSlotToGroupOnDate(
+  user: User,
+  groupId: string,
+  targetDate: Date,
+  newSlot: TimeSlot,
+  note?: string
+): {
+  slots: TimeSlot[];
+  expectedOverride: DayOverride | null;
+  status: "working" | "partial";
+  note?: string;
+} {
+  const groups = getUserTimelineGroups(user);
+  const group = groups.find((g) => g.id === groupId);
+  const dateStr = format(targetDate, "yyyy-MM-dd");
+  const existingOverride = group?.overrides?.[dateStr] ?? null;
+
+  let existingSlots: TimeSlot[] = [];
+  let existingNote = note;
+
+  if (existingOverride) {
+    existingSlots = Array.isArray(existingOverride.slots)
+      ? existingOverride.slots.map((s) => ({ ...s }))
+      : [];
+    if (!existingNote && existingOverride.note) existingNote = existingOverride.note;
+  } else if (group && group.id !== "events" && group.id !== "single") {
+    const userTz = normalizeTimeZone(user.time_zone || DEFAULT_SCHEDULE_TIMEZONE);
+    const sched = getRawGroupDaySchedule(group, targetDate, userTz);
+    existingSlots = Array.isArray(sched.slots) ? sched.slots.map((s) => ({ ...s })) : [];
+    if (!existingNote && sched.note) existingNote = sched.note;
+  }
+
+  const combinedSlots = [...existingSlots, newSlot].sort(
+    (a, b) => timeToMinutes(a.start) - timeToMinutes(b.start)
+  );
+
+  return {
+    slots: combinedSlots,
+    expectedOverride: existingOverride,
+    status: "partial",
+    note: existingNote,
+  };
+}

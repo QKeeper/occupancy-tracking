@@ -3,6 +3,8 @@ import { User, Group, DayOverride } from "@/types";
 import { OccupancyCalendarGrid } from "@/components/OccupancyCalendarGrid";
 import { TimelineGroupsModal } from "@/components/TimelineGroupsModal";
 import { FeedbackModal } from "@/components/FeedbackModal";
+import { ChangelogModal } from "@/components/ChangelogModal";
+import { APP_VERSION } from "@/lib/version";
 import { DayOverrideModal } from "@/components/DayOverrideModal";
 import { CreateGroupModal, GroupSettingsModal } from "@/components/GroupModals";
 import { GroupInviteModal } from "@/components/GroupInviteModal";
@@ -45,6 +47,7 @@ import {
   Bot,
   Globe,
   Layers,
+  History,
   MessageSquarePlus,
   ShieldCheck,
   Crown,
@@ -245,6 +248,7 @@ export function App() {
   }>({ open: false, tab: "members" });
   const [cabinetModalOpen, setCabinetModalOpen] = useState(false);
   const [feedbackModalOpen, setFeedbackModalOpen] = useState(false);
+  const [changelogModalOpen, setChangelogModalOpen] = useState(false);
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [authUsername, setAuthUsername] = useState("");
   const [overrideTarget, setOverrideTarget] = useState<{
@@ -511,6 +515,35 @@ export function App() {
       return;
     }
 
+    const prevUser = currentUser;
+    setCurrentUser((prev) => {
+      if (!prev) return prev;
+      const newOverrides = { ...(prev.overrides || {}) };
+      if (override === null) {
+        delete newOverrides[dateStr];
+      } else {
+        newOverrides[dateStr] = override;
+      }
+      let newGroups = prev.timeline_groups ? [...prev.timeline_groups] : undefined;
+      if (newGroups && groupId) {
+        newGroups = newGroups.map((g) => {
+          if (g.id !== groupId) return g;
+          const gOverrides = { ...(g.overrides || {}) };
+          if (override === null) {
+            delete gOverrides[dateStr];
+          } else {
+            gOverrides[dateStr] = override;
+          }
+          return { ...g, overrides: gOverrides };
+        });
+      }
+      return {
+        ...prev,
+        overrides: newOverrides,
+        timeline_groups: newGroups,
+      };
+    });
+
     const res = await fetch(`/api/users/${currentUser.id}/overrides/${dateStr}`, {
       method: override === null ? "DELETE" : "PUT",
       headers: { "Content-Type": "application/json" },
@@ -527,6 +560,7 @@ export function App() {
     });
     const data = await res.json();
     if (!res.ok) {
+      setCurrentUser(prevUser);
       if (res.status === 409) await fetchAllData(currentUser.id);
       throw new Error(data.error || "Ошибка сохранения дня");
     }
@@ -1100,6 +1134,17 @@ export function App() {
           <Button
             variant="ghost"
             size="sm"
+            onClick={() => setChangelogModalOpen(true)}
+            data-testid="toggle-changelog-view"
+            className="w-full justify-start text-xs font-medium"
+          >
+            <History className="size-3.5 text-primary" />
+            Список изменений
+          </Button>
+
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={() => setFeedbackModalOpen(true)}
             data-testid="toggle-feedback-view"
             className="w-full justify-start text-xs font-medium"
@@ -1350,6 +1395,7 @@ export function App() {
                 }
               }}
               onOpenMySchedule={() => setProfileModalOpen(true)}
+              onSaveDayOverride={handleSaveDayOverride}
               scrollCommand={scrollCommand}
               onScrollDayOffsetChange={(offset) => {
                 currentTimelineDayOffsetRef.current = offset;
@@ -1428,6 +1474,11 @@ export function App() {
         open={feedbackModalOpen}
         onOpenChange={setFeedbackModalOpen}
         currentUser={currentUser}
+      />
+
+      <ChangelogModal
+        open={changelogModalOpen}
+        onOpenChange={setChangelogModalOpen}
       />
 
       <AuthModal

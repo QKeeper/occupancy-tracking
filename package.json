@@ -1,7 +1,7 @@
 {
   "name": "occupancy-tracking",
   "private": true,
-  "version": "1.0.0",
+  "version": "3.1.0",
   "type": "module",
   "scripts": {
     "dev": "concurrently -k \"npm:dev:server\" \"npm:dev:client\"",

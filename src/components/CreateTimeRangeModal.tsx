@@ -1,0 +1,292 @@
+import React, { useState, useEffect } from "react";
+import { User, TimeSlot, TimelineGroup } from "@/types";
+import {
+  DEFAULT_SCHEDULE_TIMEZONE,
+  formatTimeZoneShort,
+  getUserTimelineGroups,
+  minutesToTime,
+  normalizeTimeZone,
+  timeToMinutes,
+} from "@/lib/schedule-engine";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { TimeInput24 } from "@/components/ui/time-input-24";
+import { format } from "date-fns";
+import { ru } from "date-fns/locale/ru";
+import { Sparkles, Clock, AlertCircle } from "lucide-react";
+import { toast } from "sonner";
+
+export interface CreateTimeRangeModalProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  user: User | null;
+  date: Date | null;
+  initialStart: string;
+  initialEnd: string;
+  onSave: (dateStr: string, slot: TimeSlot, groupId: string, note?: string) => Promise<void>;
+}
+
+function isImageSymbol(sym?: string): boolean {
+  if (!sym) return false;
+  return (
+    sym.startsWith("data:image/") ||
+    sym.startsWith("/uploads/") ||
+    sym.startsWith("uploads/") ||
+    sym.startsWith("http://") ||
+    sym.startsWith("https://") ||
+    /\.(png|svg|jpg|jpeg|webp|gif)(\?.*)?$/i.test(sym)
+  );
+}
+
+function getImageSrc(sym: string): string {
+  if (sym.startsWith("uploads/")) return `/${sym}`;
+  if (!sym.startsWith("/") && !sym.startsWith("http") && !sym.startsWith("data:")) {
+    return `/uploads/${sym}`;
+  }
+  return sym;
+}
+
+export const CreateTimeRangeModal: React.FC<CreateTimeRangeModalProps> = ({
+  open,
+  onOpenChange,
+  user,
+  date,
+  initialStart,
+  initialEnd,
+  onSave,
+}) => {
+  const [startTime, setStartTime] = useState<string>("09:00");
+  const [endTime, setEndTime] = useState<string>("10:00");
+  const [selectedGroupId, setSelectedGroupId] = useState<string>("events");
+  const [note, setNote] = useState<string>("");
+  const [saving, setSaving] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (open) {
+      setStartTime(initialStart || "09:00");
+      setEndTime(initialEnd || "10:00");
+      setSelectedGroupId("events");
+      setNote("");
+    }
+  }, [open, initialStart, initialEnd]);
+
+  if (!user || !date) return null;
+
+  const groups: TimelineGroup[] = getUserTimelineGroups(user);
+  const viewerTz = normalizeTimeZone(user.time_zone || DEFAULT_SCHEDULE_TIMEZONE);
+  const dateStr = format(date, "yyyy-MM-dd");
+  const formattedDate = format(date, "EEEE, d MMMM", { locale: ru });
+
+  // Calculate duration in minutes
+  const startM = timeToMinutes(startTime);
+  const endM = endTime === "24:00" ? 1440 : timeToMinutes(endTime);
+  const durationMin = endM >= startM ? endM - startM : 1440 - startM + endM;
+  const isOvernight = endM < startM;
+  const isTooShort = durationMin < 30;
+
+  const durationHours = Math.floor(durationMin / 60);
+  const durationRemainingMins = durationMin % 60;
+  let durationLabel = "";
+  if (durationHours > 0) {
+    durationLabel += `${durationHours} ч `;
+  }
+  if (durationRemainingMins > 0 || durationHours === 0) {
+    durationLabel += `${durationRemainingMins} мин`;
+  }
+
+  const handleSave = async () => {
+    if (isTooShort) {
+      toast.error("Минимальная длительность интервала — 30 минут");
+      return;
+    }
+
+    setSaving(true);
+    try {
+      await onSave(
+        dateStr,
+        { start: startTime, end: endTime },
+        selectedGroupId,
+        note.trim() || undefined
+      );
+      onOpenChange(false);
+    } catch (e: any) {
+      toast.error(e.message || "Не удалось сохранить интервал");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Clock className="size-5 text-primary" />
+            <span>Новый временной промежуток</span>
+          </DialogTitle>
+          <DialogDescription className="capitalize">
+            {formattedDate} • {formatTimeZoneShort(viewerTz)}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4 py-2">
+          {/* Настройка времени */}
+          <div className="space-y-2 p-3 rounded-lg border border-border bg-muted/20">
+            <div className="flex items-center justify-between">
+              <Label className="text-xs font-medium">Время интервала</Label>
+              <div className="flex items-center gap-1.5">
+                {isOvernight && (
+                  <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-400 border border-indigo-500/20">
+                    +1 день
+                  </span>
+                )}
+                <span
+                  className={`text-xs font-mono font-medium px-2 py-0.5 rounded ${
+                    isTooShort
+                      ? "bg-destructive/15 text-destructive font-semibold"
+                      : "bg-primary/10 text-primary"
+                  }`}
+                >
+                  {durationLabel.trim()}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-center gap-3 py-1">
+              <div className="w-32">
+                <TimeInput24 value={startTime} onChange={setStartTime} />
+              </div>
+              <span className="text-muted-foreground font-mono font-medium">–</span>
+              <div className="w-32">
+                <TimeInput24 value={endTime} onChange={setEndTime} allow24={true} />
+              </div>
+            </div>
+
+            {isTooShort && (
+              <div className="flex items-center justify-center gap-1.5 text-xs text-destructive pt-1">
+                <AlertCircle className="size-3.5 shrink-0" />
+                <span>Нельзя ужать меньше чем до полу часа (30 минут).</span>
+              </div>
+            )}
+          </div>
+
+          {/* Присвоение группе или без группы */}
+          <div className="space-y-2">
+            <Label className="text-xs font-medium">Категория:</Label>
+            <div className="flex flex-col gap-1.5">
+              {/* Опция: Без категории */}
+              <button
+                type="button"
+                onClick={() => setSelectedGroupId("events")}
+                className={`w-full p-2.5 rounded-lg border text-left flex items-center justify-between transition-all cursor-pointer ${
+                  selectedGroupId === "events"
+                    ? "border-primary bg-primary/10 text-foreground ring-1 ring-primary/40 shadow-xs"
+                    : "border-border bg-card/60 text-muted-foreground hover:text-foreground hover:bg-muted/30"
+                }`}
+              >
+                <div className="flex items-center gap-2.5">
+                  <div className="size-6 rounded-md bg-indigo-500/20 text-indigo-400 flex items-center justify-center shrink-0">
+                    <Sparkles className="size-3.5" />
+                  </div>
+                  <div className="text-xs font-semibold text-foreground">
+                    Без категории
+                  </div>
+                </div>
+                <div
+                  className={`size-4 rounded-full border flex items-center justify-center shrink-0 ${
+                    selectedGroupId === "events"
+                      ? "border-primary bg-primary"
+                      : "border-muted-foreground/40"
+                  }`}
+                >
+                  {selectedGroupId === "events" && (
+                    <div className="size-1.5 rounded-full bg-primary-foreground" />
+                  )}
+                </div>
+              </button>
+
+              {/* Существующие группы пользователя */}
+              {groups.filter((g) => g.id !== "events" && g.id !== "single").map((g) => {
+                const isSelected = selectedGroupId === g.id;
+                const sym = g.style.symbol;
+                const isImg = isImageSymbol(sym);
+                return (
+                  <button
+                    key={g.id}
+                    type="button"
+                    onClick={() => setSelectedGroupId(g.id)}
+                    className={`w-full p-2.5 rounded-lg border text-left flex items-center justify-between transition-all cursor-pointer ${
+                      isSelected
+                        ? "border-primary bg-primary/10 text-foreground ring-1 ring-primary/40 shadow-xs"
+                        : "border-border bg-card/60 text-muted-foreground hover:text-foreground hover:bg-muted/30"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <div
+                        className="size-6 rounded-md flex items-center justify-center text-white shrink-0 text-xs shadow-xs overflow-hidden"
+                        style={{ backgroundColor: g.style.bgColor }}
+                      >
+                        {isImg ? (
+                          <img
+                            src={getImageSrc(sym)}
+                            alt=""
+                            className="size-4 object-contain"
+                          />
+                        ) : (
+                          <span>{sym || "•"}</span>
+                        )}
+                      </div>
+                      <div className="text-xs font-semibold text-foreground">{g.name}</div>
+                    </div>
+                    <div
+                      className={`size-4 rounded-full border flex items-center justify-center shrink-0 ${
+                        isSelected
+                          ? "border-primary bg-primary"
+                          : "border-muted-foreground/40"
+                      }`}
+                    >
+                      {isSelected && (
+                        <div className="size-1.5 rounded-full bg-primary-foreground" />
+                      )}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Заметка / Название */}
+          <div className="space-y-1.5">
+            <Label htmlFor="create-note" className="text-xs font-medium">
+              Заметка / Название события
+            </Label>
+            <Input
+              id="create-note"
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="Например: Встреча, Врач, Тренировка..."
+            />
+          </div>
+        </div>
+
+        <DialogFooter className="flex sm:justify-between items-center w-full gap-2">
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Отмена
+          </Button>
+          <Button onClick={handleSave} disabled={saving || isTooShort}>
+            {saving ? "Сохранение..." : "Создать интервал"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+};

@@ -6,6 +6,7 @@ export interface TimeInput24Props {
   onChange: (value: string) => void;
   className?: string;
   disabled?: boolean;
+  allow24?: boolean;
 }
 
 export const TimeInput24: React.FC<TimeInput24Props> = ({
@@ -13,7 +14,9 @@ export const TimeInput24: React.FC<TimeInput24Props> = ({
   onChange,
   className,
   disabled = false,
+  allow24 = false,
 }) => {
+  const maxHour = allow24 ? 24 : 23;
   const hourRef = React.useRef<HTMLInputElement>(null);
   const minuteRef = React.useRef<HTMLInputElement>(null);
 
@@ -23,8 +26,10 @@ export const TimeInput24: React.FC<TimeInput24Props> = ({
 
   // Parse "HH:MM" safely
   const parts = (value || "09:00").split(":");
-  const hNum = Math.max(0, Math.min(23, parseInt(parts[0] || "9", 10) || 0));
-  const mNum = Math.max(0, Math.min(59, parseInt(parts[1] || "0", 10) || 0));
+  const parsedH = parseInt(parts[0] || "9", 10) || 0;
+  const hNum = Math.max(0, Math.min(maxHour, parsedH));
+  const parsedM = parseInt(parts[1] || "0", 10) || 0;
+  const mNum = hNum === 24 ? 0 : Math.max(0, Math.min(59, parsedM));
   const hh = String(hNum).padStart(2, "0");
   const mm = String(mNum).padStart(2, "0");
 
@@ -44,15 +49,18 @@ export const TimeInput24: React.FC<TimeInput24Props> = ({
 
   const commitTime = React.useCallback(
     (nextH: string, nextM: string) => {
-      const validH = String(Math.max(0, Math.min(23, parseInt(nextH, 10) || 0))).padStart(2, "0");
-      const validM = String(Math.max(0, Math.min(59, parseInt(nextM, 10) || 0))).padStart(2, "0");
+      const parsedNextH = parseInt(nextH, 10) || 0;
+      const validHNum = Math.max(0, Math.min(maxHour, parsedNextH));
+      const validH = String(validHNum).padStart(2, "0");
+      const validMNum = validHNum === 24 ? 0 : Math.max(0, Math.min(59, parseInt(nextM, 10) || 0));
+      const validM = String(validMNum).padStart(2, "0");
       latestHourRef.current = validH;
       latestMinuteRef.current = validM;
       setHourVal(validH);
       setMinuteVal(validM);
       onChange(`${validH}:${validM}`);
     },
-    [onChange]
+    [maxHour, onChange]
   );
 
   const handleHourKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -71,7 +79,8 @@ export const TimeInput24: React.FC<TimeInput24Props> = ({
       hourBufferRef.current = "";
       const delta = e.key === "ArrowUp" ? 1 : -1;
       const currentH = parseInt(latestHourRef.current, 10) || 0;
-      const nextH = String((currentH + delta + 24) % 24).padStart(2, "0");
+      const hourMod = maxHour + 1;
+      const nextH = String((currentH + delta + hourMod) % hourMod).padStart(2, "0");
       commitTime(nextH, latestMinuteRef.current);
       return;
     }
@@ -111,7 +120,7 @@ export const TimeInput24: React.FC<TimeInput24Props> = ({
         const combined = parseInt(firstDigit + digit, 10);
         hourBufferRef.current = "";
 
-        if (combined <= 23) {
+        if (combined <= maxHour) {
           const nextH = String(combined).padStart(2, "0");
           commitTime(nextH, latestMinuteRef.current);
         } else {

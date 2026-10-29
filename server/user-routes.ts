@@ -123,7 +123,7 @@ export function installUserRoutes(app: Express, pool: Pool, broadcast: (type: st
         const nextOverride = "override" in body ? overrideSchema.parse(body.override) : null;
         client = await pool.connect();
         await client.query("BEGIN");
-        const { rows: userRows } = await client.query("SELECT id, timeline_groups FROM users WHERE id=$1 FOR UPDATE", [res.locals.userId]);
+        const { rows: userRows } = await client.query("SELECT id, timeline_groups, timeline_style, schedule_config FROM users WHERE id=$1 FOR UPDATE", [res.locals.userId]);
 
         if (targetGroupId === "work") {
           const current = await client.query(`SELECT COALESCE((SELECT value FROM manual_override_documents
@@ -147,8 +147,26 @@ export function installUserRoutes(app: Express, pool: Pool, broadcast: (type: st
           }
           await client.query("UPDATE users SET revision=revision+1 WHERE id=$1", [res.locals.userId]);
         } else {
-          const groups = Array.isArray(userRows[0]?.timeline_groups) ? [...userRows[0].timeline_groups] : [];
-          const groupIdx = groups.findIndex((g: any) => g.id === targetGroupId);
+          const groups = Array.isArray(userRows[0]?.timeline_groups) && userRows[0].timeline_groups.length > 0 ? [...userRows[0].timeline_groups] : [{ id: "work", name: "График работы", style: userRows[0]?.timeline_style || { bgColor: "#e11d48", patternColor: "#fda4af", patternType: "stripes", symbol: "💼", iconScale: 1 }, schedule_config: userRows[0]?.schedule_config || { mode: "fixed_weekly" }, overrides: {}, is_enabled: true }];
+          let groupIdx = groups.findIndex((g: any) => g.id === targetGroupId);
+          if (groupIdx < 0 && (targetGroupId === "events" || targetGroupId === "single")) {
+            const newGroup = {
+              id: targetGroupId,
+              name: "Без категории",
+              style: {
+                bgColor: "#6366f1",
+                patternColor: "#a5b4fc",
+                patternType: "none",
+                symbol: "📌",
+                iconScale: 1,
+              },
+              schedule_config: { mode: "manual" as const },
+              overrides: {},
+              is_enabled: true,
+            };
+            groups.push(newGroup);
+            groupIdx = groups.length - 1;
+          }
           if (groupIdx >= 0) {
             const existingOv = groups[groupIdx].overrides?.[date] ?? null;
             if (body.expectedOverride !== undefined && !areOverridesEqual(existingOv, body.expectedOverride)) {

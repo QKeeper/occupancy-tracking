@@ -55,7 +55,11 @@ export const TintedPatternIcon: React.FC<{
 }> = ({ symbol, color, size = 16 }) => {
   const rawId = useId();
   const filterId = `tint-${rawId.replace(/[^a-zA-Z0-9_-]/g, "")}`;
-  const isCustomImage = symbol.startsWith("data:image/") || symbol.startsWith("/uploads/icon_");
+  const isCustomImage =
+    symbol.startsWith("data:image/") ||
+    symbol.startsWith("/uploads/") ||
+    symbol.startsWith("uploads/") ||
+    /\.(png|svg|jpg|jpeg|webp|gif)(\?.*)?$/i.test(symbol);
 
   return React.createElement(
     "svg",
@@ -138,8 +142,10 @@ export function getTimelineBlockStyle(config?: Partial<TimelineStyleConfig>): Re
   }
 
   if (patternType === "symbols") {
-    if (symbol.startsWith("/uploads/icon_")) {
-      const params = new URLSearchParams({ icon: symbol, color: patternColor, scale: String(iconScale) });
+    const isUploadPath = symbol.startsWith("/uploads/") || symbol.startsWith("uploads/");
+    if (isUploadPath) {
+      const iconPath = symbol.startsWith("/") ? symbol : `/${symbol}`;
+      const params = new URLSearchParams({ icon: iconPath, color: patternColor, scale: String(iconScale) });
       return {
         backgroundColor: baseBg, borderColor: borderCol,
         backgroundImage: `url("/api/pattern-tile?${params}")`,
@@ -147,7 +153,7 @@ export function getTimelineBlockStyle(config?: Partial<TimelineStyleConfig>): Re
       };
     }
 
-    const isCustomImage = symbol.startsWith("data:image/");
+    const isCustomImage = symbol.startsWith("data:image/") || /\.(png|svg|jpg|jpeg|webp|gif)(\?.*)?$/i.test(symbol);
     const size1 = Math.round(13 * iconScale * 10) / 10;
     const size2 = Math.round(11 * iconScale * 10) / 10;
 
