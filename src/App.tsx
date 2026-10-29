@@ -4,7 +4,6 @@ import { OccupancyCalendarGrid } from "@/components/OccupancyCalendarGrid";
 import { TimelineGroupsModal } from "@/components/TimelineGroupsModal";
 import { FeedbackModal } from "@/components/FeedbackModal";
 import { ChangelogModal } from "@/components/ChangelogModal";
-import { APP_VERSION } from "@/lib/version";
 import { DayOverrideModal } from "@/components/DayOverrideModal";
 import { CreateGroupModal, GroupSettingsModal } from "@/components/GroupModals";
 import { GroupInviteModal } from "@/components/GroupInviteModal";
@@ -1196,11 +1195,6 @@ export function App() {
             </div>
             <UserIcon className="size-3.5 text-muted-foreground shrink-0" />
           </Button>
-          <div className="pt-1 text-center">
-            <span className="text-[10px] text-muted-foreground/50 font-mono select-none">
-              {APP_VERSION}
-            </span>
-          </div>
         </div>
       </aside>
 
