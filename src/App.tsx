@@ -1196,6 +1196,11 @@ export function App() {
             </div>
             <UserIcon className="size-3.5 text-muted-foreground shrink-0" />
           </Button>
+          <div className="pt-1 text-center">
+            <span className="text-[10px] text-muted-foreground/50 font-mono select-none">
+              {APP_VERSION}
+            </span>
+          </div>
         </div>
       </aside>
 

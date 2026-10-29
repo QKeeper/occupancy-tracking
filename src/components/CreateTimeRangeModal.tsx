@@ -145,7 +145,7 @@ export const CreateTimeRangeModal: React.FC<CreateTimeRangeModalProps> = ({
               <Label className="text-xs font-medium">Время интервала</Label>
               <div className="flex items-center gap-1.5">
                 {isOvernight && (
-                  <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-400 border border-indigo-500/20">
+                  <span className="text-[10px] text-muted-foreground/80 font-normal px-1.5 py-0.5 rounded bg-muted/60">
                     +1 день
                   </span>
                 )}

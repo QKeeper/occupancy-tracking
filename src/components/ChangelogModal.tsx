@@ -14,7 +14,7 @@ import {
   Clock,
   Link,
   MessageSquarePlus,
-  Server,
+  ShieldCheck,
   MoveHorizontal,
   Moon,
   Zap,
@@ -34,7 +34,7 @@ interface ChangelogRelease {
   badge?: string;
   isLatest?: boolean;
   sections: {
-    category: "new" | "improved" | "fixed";
+    category: "new" | "improved";
     items: {
       title: string;
       desc?: string;
@@ -45,9 +45,9 @@ interface ChangelogRelease {
 
 const CHANGELOG_DATA: ChangelogRelease[] = [
   {
-    version: "3.1.0",
+    version: "0.1.0",
     date: "29 октября 2026",
-    title: "Интерактивный таймлайн: Drag-and-Drop, свайпы и ночные смены",
+    title: "Интерактивный таймлайн: перетаскивание, свайпы и ночные смены",
     badge: "Текущая версия",
     isLatest: true,
     sections: [
@@ -55,8 +55,8 @@ const CHANGELOG_DATA: ChangelogRelease[] = [
         category: "new",
         items: [
           {
-            title: "Растягивание и сжатие интервалов мышью",
-            desc: "Изменяйте время начала и конца существующих блоков прямо на таймлайне с привязкой к 15 минутам. Минимальная длительность — 30 минут.",
+            title: "Растягивание и сжатие интервалов",
+            desc: "Изменяйте время начала и конца существующих блоков прямо на таймлайне простым перетаскиванием.",
             icon: MoveHorizontal,
           },
           {
@@ -65,13 +65,13 @@ const CHANGELOG_DATA: ChangelogRelease[] = [
             icon: Zap,
           },
           {
-            title: "Категория «Без категории» для разовых событий",
-            desc: "Создавайте единичные события и встречи без необходимости привязывать их к рабочему графику или расписанию.",
+            title: "Быстрое добавление разовых событий",
+            desc: "Создавайте единичные события и встречи прямо на таймлайне без привязки к рабочим графикам.",
             icon: Sparkles,
           },
           {
             title: "Ночные смены и переход через полночь",
-            desc: "Полноценная поддержка интервалов, переходящих через полночь (например, 22:00 – 06:00). На таймлайне и в модалках отображается бейдж «+1 день».",
+            desc: "Полноценная поддержка интервалов, переходящих через полночь (например, 22:00 – 06:00).",
             icon: Moon,
           },
         ],
@@ -80,13 +80,13 @@ const CHANGELOG_DATA: ChangelogRelease[] = [
         category: "improved",
         items: [
           {
-            title: "Мгновенные оптимистичные обновления",
+            title: "Мгновенные обновления",
             desc: "После изменения размера интервала изменения сразу фиксируются в интерфейсе без задержек и ожидания ответа сервера.",
             icon: Zap,
           },
           {
-            title: "Интеллектуальная подсветка ручек изменения",
-            desc: "Неоновые белые маркеры на краях интервалов появляются только при приближении курсора и не засоряют таймлайн.",
+            title: "Подсветка маркеров изменения",
+            desc: "Маркеры на краях интервалов появляются только при наведении курсора и не перегружают сетку.",
             icon: Sparkles,
           },
           {
@@ -101,27 +101,12 @@ const CHANGELOG_DATA: ChangelogRelease[] = [
           },
         ],
       },
-      {
-        category: "fixed",
-        items: [
-          {
-            title: "Исправлен сброс времени 24:00 в 23:00",
-            desc: "В таймпикере добавлена полноценная поддержка ввода и сохранения границы окончания интервала на 24:00.",
-            icon: Clock,
-          },
-          {
-            title: "Отображение кастомных иконок категорий",
-            desc: "Пользовательские загруженные аватары и иконки групп корректно визуализируются в окне создания событий.",
-            icon: Layers,
-          },
-        ],
-      },
     ],
   },
   {
-    version: "3.0.0",
+    version: "0.0.9",
     date: "29 октября 2026",
-    title: "Мультигрупповые таймлайны, инвайт-ссылки и система фидбека",
+    title: "Мультигрупповые таймлайны, ссылки-приглашения и система предложений",
     sections: [
       {
         category: "new",
@@ -132,19 +117,14 @@ const CHANGELOG_DATA: ChangelogRelease[] = [
             icon: Layers,
           },
           {
-            title: "Инвайт-ссылки в группы как в Discord",
-            desc: "Генерируйте уникальные ссылки-приглашения в группы с предпросмотром, возможностью сброса и мгновенным присоединением.",
+            title: "Приглашения в группы по ссылке",
+            desc: "Создавайте ссылки-приглашения с предпросмотром, возможностью сброса и быстрым вступлением.",
             icon: Link,
           },
           {
             title: "Доска обратной связи и предложений",
-            desc: "Встроенный трекер предложений и багов: создание тикетов с тегами, голосование лайками и обсуждение в комментариях.",
+            desc: "Встроенный раздел для предложений и вопросов: создание тикетов с тегами, голосование лайками и обсуждение в комментариях.",
             icon: MessageSquarePlus,
-          },
-          {
-            title: "Автоматический CI/CD деплой",
-            desc: "Бесшовный автоматический деплой через GitHub Actions на сервер с systemd-демоном и проверкой healthcheck.",
-            icon: Server,
           },
         ],
       },
@@ -152,13 +132,18 @@ const CHANGELOG_DATA: ChangelogRelease[] = [
         category: "improved",
         items: [
           {
-            title: "24-часовой ввод времени shadcn/ui",
-            desc: "Новый удобный компонент ввода времени с синхронным буфером двухзначных чисел и поддержкой стрелок клавиатуры.",
+            title: "Удобный 24-часовой ввод времени",
+            desc: "Быстрый набор времени с клавиатуры и поддержка стрелок.",
             icon: Clock,
           },
           {
-            title: "Оптимистичные блокировки и CAS-синхронизация",
-            desc: "Устранена вероятность конфликтов и затирания данных при одновременном редактировании графика несколькими пользователями.",
+            title: "Надёжность и стабильность сервера",
+            desc: "Автоматизирован процесс обновлений и мониторинг работоспособности системы.",
+            icon: ShieldCheck,
+          },
+          {
+            title: "Надёжная синхронизация расписания",
+            desc: "Устранена вероятность конфликтов при одновременном редактировании графика несколькими пользователями.",
             icon: CheckCircle2,
           },
         ],
@@ -170,7 +155,6 @@ const CHANGELOG_DATA: ChangelogRelease[] = [
 const CATEGORY_CONFIG = {
   new: { label: "Новое", color: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/20" },
   improved: { label: "Улучшения", color: "bg-blue-500/15 text-blue-600 dark:text-blue-400 border-blue-500/20" },
-  fixed: { label: "Исправления", color: "bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/20" },
 };
 
 export const ChangelogModal: React.FC<ChangelogModalProps> = ({ open, onOpenChange }) => {
@@ -193,7 +177,7 @@ export const ChangelogModal: React.FC<ChangelogModalProps> = ({ open, onOpenChan
               </div>
             </div>
             <Badge variant="outline" className="font-mono text-xs px-2.5 py-1 shrink-0">
-              v{APP_VERSION}
+              {APP_VERSION}
             </Badge>
           </div>
         </DialogHeader>
@@ -271,12 +255,6 @@ export const ChangelogModal: React.FC<ChangelogModalProps> = ({ open, onOpenChan
               </div>
             ))}
           </div>
-        </div>
-
-        <div className="p-3 border-t border-border/60 bg-muted/20 text-center">
-          <span className="text-[11px] text-muted-foreground font-mono">
-            Версия билда: {APP_VERSION}
-          </span>
         </div>
       </DialogContent>
     </Dialog>
