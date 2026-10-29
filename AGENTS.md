@@ -1,6 +1,6 @@
 # AGENTS.md — Development, Branching & Deployment Guidelines
 
-Этот документ описывает регламент разработки, модель ветвления Git, архитектуру базы данных и процесс автоматического CI/CD деплоя проекта **Occupancy Tracking (Syncro)**.
+Этот документ описывает регламент разработки, модель ветвления Git, архитектуру базы данных, подсистему групп таймлайнов и процесс автоматического CI/CD деплоя проекта **Occupancy Tracking (Syncro)**.
 
 ---
 
@@ -11,12 +11,44 @@
   * По умолчанию в GitHub репозитории главной веткой должна быть выбрана `dev`.
 * **`main`** — **Продакшен-ветка (Production branch)**:
   * Содержит исключительно стабильный релизный код.
-  * Изменения попадают в `main` только через Pull Request или слияние (merge) из ветки `dev` после тестирования.
+  * Изменения попадают в `main` только через Pull Request или слияние (merge) из ветки `dev` после локального тестирования.
   * **Каждый пуш в ветку `main` автоматически запускает GitHub Actions CI/CD пайплайн, который прогоняет тесты, собирает проект и выполняет деплой на удалённый сервер.**
 
 ---
 
-## 2. Работа с базой данных (PostgreSQL)
+## 2. Архитектура групп таймлайнов (Timeline Groups)
+
+Вместо единственного «графика работы» в системе реализована мультигрупповая архитектура таймлайнов: каждый пользователь может создавать произвольное количество независимых групп (например: «График работы», «Сон», «Спорт», «Учёба» и др.).
+
+### 2.1. Структура `TimelineGroup`
+```typescript
+interface TimelineGroup {
+  id: string;                     // Уникальный ID ('work', 'sleep', 'group_<timestamp>')
+  name: string;                   // Название группы ('График работы', 'Сон')
+  style: TimelineStyleConfig;     // Индивидуальный скин (bgColor, patternColor, symbol/icon, iconScale)
+  schedule_config: ScheduleConfig;// Расписание (fixed_weekly, shift_cycle, free)
+  overrides?: OverrideMap;        // Исключения по дням конкретно для этой группы
+  is_enabled?: boolean;           // Флаг активности (true/false)
+}
+```
+
+### 2.2. Принципы работы:
+1. **Единый таймлайн на сетке календаря**:
+   * Все активные группы пользователя (`is_enabled !== false`) объединяются в одну общую строку на сетке календаря.
+   * Каждый блок занятости сохраняет стиль (`style`) и название (`groupName`) своей группы.
+   * Клик по блоку на сетке открывает модалку оверрайда с автоматическим переключением на соответствующую группу (`groupId`).
+2. **Расчёт доступности и пересечений**:
+   * Пользователь считается занятым, если занят **хотя бы в одной** активной группе.
+   * Общие свободные окна («зелёные зоны») отображаются только тогда, когда пользователь свободен **во всех** активных группах одновременно.
+3. **Обратная совместимость (Backwards Compatibility)**:
+   * База данных хранит группы в колонке `users.timeline_groups` (JSONB).
+   * Функция `initDb()` автоматически переносит старые настройки пользователей без групп в дефолтную группу `work` («График работы»).
+   * При любых сохранениях профиля сервер (`server/user-routes.ts`) автоматически синхронизирует группу `work` с устаревшими полями `schedule_config` и `timeline_style` для поддержки старых API и сторонних клиентов.
+   * На клиенте (`src/App.tsx`, `groupMembers`) поле `timeline_groups` обязательно пробрасывается при маппинге участников, чтобы движок занятости не откатывался к дефолтной группе.
+
+---
+
+## 3. Работа с базой данных (PostgreSQL)
 
 > ⚠️ **КРИТИЧЕСКИ ВАЖНО:** На удалённом сервере уже работает PostgreSQL с другими базами данных.
 
@@ -31,105 +63,61 @@
    GRANT ALL PRIVILEGES ON DATABASE occupancy_tracking TO occupancy_user;
    ```
 3. **Автоматические миграции:**
-   * При старте бэкенда функция `initDb()` автоматически создает все таблицы (`users`, `groups`, `group_members`, `manual_overrides`, `auth_sessions`, `pattern_media`) с использованием `CREATE TABLE IF NOT EXISTS` и `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`.
-   * Ручное создание таблиц не требуется.
+   * При старте бэкенда функция `initDb()` автоматически создает и обновляет все таблицы (`users`, `groups`, `group_members`, `manual_overrides`, `auth_sessions`, `pattern_media`) и представления (`user_profiles`) с использованием `CREATE TABLE IF NOT EXISTS`, `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` и `CREATE OR REPLACE VIEW`.
+   * Ручное создание или миграция таблиц на сервере **не требуется**.
 
 ---
 
-## 3. Архитектура деплоя (Production Deployment)
+## 4. Архитектура деплоя (Production Deployment)
 
 * **Продакшен-демон (systemd):**
   * Служба: `/etc/systemd/system/occupancy-tracking.service`.
   * Рабочая директория: `/var/www/schedule.ssdk.dev`.
   * Команда запуска: `ExecStart=/usr/bin/pnpm start` (запускает `tsx server/index.ts`).
   * Пользователь: `root`.
-* **Раздача статики:**
+* **Раздача статики и API:**
   * Express-сервер автоматически раздает клиентский билд из папки `/dist` при обращении к любым SPA-маршрутам.
   * Порт бэкенда по умолчанию: `3001` (привязан к `127.0.0.1:3001` для безопасности).
-* **Nginx Reverse Proxy:**
+  * Эндпоинт `/api/health` открыт без авторизации для healthcheck-проверок.
+* **Реверс-прокси (Caddy / Nginx):**
   * Проксирует запросы с 80/443 порта на `127.0.0.1:3001`.
   * Домен: `schedule.ssdk.dev`.
-  * Конфиг включает поддержку Server-Sent Events `/api/events` с отключенным буферизированием (`proxy_buffering off;`) и лимит тела запроса 25MB для медиа.
+  * Включает поддержку Server-Sent Events `/api/events` с отключенным буферизированием (`proxy_buffering off;`) и лимит тела запроса 25MB для медиа.
 
 ---
 
-## 4. Пайплайн CI/CD (GitHub Actions)
+## 5. Пайплайн CI/CD (GitHub Actions)
 
 Файл конфигурации: `.github/workflows/deploy.yml`.
 
 ### Что делает пайплайн:
 1. **Шаг `test-and-build`:**
-   * Проверяет код при каждом пуше в `main` и каждом Pull Request в `main` или `dev`.
-   * Устанавливает зависимости через `pnpm`.
-   * Запускает полный набор юнит- и интеграционных тестов (`pnpm test`).
+   * Запускается при каждом пуше в `main` и каждом Pull Request в `main` или `dev`.
+   * Поднимает изолированный тестовый сервис PostgreSQL 16.
+   * Устанавливает зависимости через `pnpm install --frozen-lockfile`.
+   * Прогоняет полный набор тестов (`pnpm test` $\rightarrow$ `server/security.test.cjs`, 22 теста).
    * Собирает фронтенд (`pnpm run build`).
 2. **Шаг `deploy`:**
-   * Запускается только при пуше в `main` (или ручном запуске через `workflow_dispatch`).
-   * Подключается к серверу по SSH с использованием GitHub Secrets.
-   * Заходит в папку приложения (`/var/www/schedule.ssdk.dev`).
-   * Запускает скрипт `./deploy.sh`: подтягивает изменения (`git pull`), устанавливает зависимости (`pnpm install --frozen-lockfile`), собирает фронтенд (`pnpm run build`), перезапускает службу (`systemctl restart occupancy-tracking`) и проверяет здоровье сервиса (`/api/health`).
+   * Запускается автоматически при пуше в ветку `main`.
+   * Подключается к серверу по SSH.
+   * Переходит в рабочую директорию (`/var/www/schedule.ssdk.dev`).
+   * Принудительно сбрасывает любые локальные артефакты: `git fetch origin main && git reset --hard origin/main`.
+   * Запускает `./deploy.sh`: устанавливает зависимости, пересобирает фронтенд, перезапускает службу (`systemctl restart occupancy-tracking`) и проверяет статус здоровья `/api/health`.
 
 ### Необходимые GitHub Secrets:
 В настройках GitHub репозитория (**Settings -> Secrets and variables -> Actions**):
-* `SSH_HOST`: IP-адрес или домен вашего сервера (например, `schedule.ssdk.dev` или IP).
-* `SSH_USER`: Пользователь SSH на сервере (например, `root`).
-* `SSH_KEY`: Приватный SSH-ключ для авторизации (соответствующий публичный ключ должен быть в `~/.ssh/authorized_keys` на сервере).
-* `SSH_PORT`: Порт SSH (обычно `22`).
-* `APP_DIR`: Полный путь к папке проекта на сервере (`/var/www/schedule.ssdk.dev`, по умолчанию подставляется автоматически).
-
----
-
-## 5. Первоначальная настройка сервера (Runbook)
-
-1. **Клонирование проекта на сервер:**
-   ```bash
-   sudo mkdir -p /var/www/schedule.ssdk.dev
-   git clone <URL_РЕПОЗИТОРИЯ> /var/www/schedule.ssdk.dev
-   cd /var/www/schedule.ssdk.dev
-   ```
-
-2. **Создание `.env` файла:**
-   ```bash
-   cp .env.production.example .env
-   nano .env
-   ```
-   Укажите строку подключения к базе `DATABASE_URL` и домен `APP_ORIGINS=https://schedule.ssdk.dev`.
-
-3. **Служба systemd (`/etc/systemd/system/occupancy-tracking.service`):**
-   ```ini
-   [Unit]
-   Description=Occupancy Tracking (Syncro)
-   After=network.target postgresql.service
-
-   [Service]
-   Type=simple
-   User=root
-   WorkingDirectory=/var/www/schedule.ssdk.dev
-   ExecStart=/usr/bin/pnpm start
-   Restart=always
-   RestartSec=3
-   Environment=NODE_ENV=production
-
-   [Install]
-   WantedBy=multi-user.target
-   ```
-   Активация:
-   ```bash
-   systemctl daemon-reload
-   systemctl enable occupancy-tracking
-   systemctl start occupancy-tracking
-   ```
-
-4. **Проверка прав на `deploy.sh`:**
-   ```bash
-   chmod +x deploy.sh
-   ```
+* `SSH_HOST`: IP-адрес или домен сервера (`schedule.ssdk.dev` или `79.174.86.233`).
+* `SSH_USER`: Пользователь SSH (`root`).
+* `SSH_KEY`: Закрытый SSH-ключ (соответствующий открытый ключ должен быть добавлен в `/root/.ssh/authorized_keys` с правами `chmod 600`).
+* `SSH_PORT`: Порт SSH (по умолчанию `22`).
+* `APP_DIR`: Каталог проекта на сервере (`/var/www/schedule.ssdk.dev`).
 
 ---
 
 ## 6. Правила для агентов (AI Agent Checklist)
 
-* Перед созданием коммита/PR всегда запускайте `pnpm test` и `pnpm run build`.
-* Не вносите ломающие изменения в структуру базы данных без обеспечения обратной совместимости.
-* Никогда не коммитьте `.env`, секреты и содержимое папки `uploads/`.
-* Основная рабочая ветка для разработки — `dev`. В `main` код попадает только для релиза.
+* **Ветвление**: Повседневная работа ведётся в `dev`. В `main` код попадает только при релизе.
+* **Перед коммитом/PR**: Всегда запускайте `pnpm test` и `pnpm run build`. Все 22 теста должны завершаться со статусом PASS.
+* **База данных**: Не вносите ломающие изменения в структуру PostgreSQL. Любые новые поля добавляйте через `ADD COLUMN IF NOT EXISTS` в `initDb()`.
+* **Секреты**: Никогда не коммитьте `.env`, приватные SSH-ключи, пароли и содержимое папки `uploads/`.
+* **Таймлайн**: При получении участников группы (`groupMembers`) всегда пробрасывайте поле `timeline_groups`, чтобы не терялись пользовательские группы занятости.
