@@ -16,10 +16,12 @@ export const TimeInput24: React.FC<TimeInput24Props> = ({
 }) => {
   const hourRef = React.useRef<HTMLInputElement>(null);
   const minuteRef = React.useRef<HTMLInputElement>(null);
-  const [hourFlag, setHourFlag] = React.useState<boolean>(false);
-  const [minuteFlag, setMinuteFlag] = React.useState<boolean>(false);
 
-  // Parse "HH:MM" value safely
+  // Synchronous key typing buffers to eliminate async state race conditions
+  const hourBufferRef = React.useRef<string>("");
+  const minuteBufferRef = React.useRef<string>("");
+
+  // Parse "HH:MM" safely
   const parts = (value || "09:00").split(":");
   const hNum = Math.max(0, Math.min(23, parseInt(parts[0] || "9", 10) || 0));
   const mNum = Math.max(0, Math.min(59, parseInt(parts[1] || "0", 10) || 0));
@@ -29,15 +31,23 @@ export const TimeInput24: React.FC<TimeInput24Props> = ({
   const [hourVal, setHourVal] = React.useState(hh);
   const [minuteVal, setMinuteVal] = React.useState(mm);
 
+  // Latest committed values ref for atomic access inside event handlers
+  const latestHourRef = React.useRef(hh);
+  const latestMinuteRef = React.useRef(mm);
+
   React.useEffect(() => {
     setHourVal(hh);
     setMinuteVal(mm);
+    latestHourRef.current = hh;
+    latestMinuteRef.current = mm;
   }, [hh, mm]);
 
   const commitTime = React.useCallback(
     (nextH: string, nextM: string) => {
       const validH = String(Math.max(0, Math.min(23, parseInt(nextH, 10) || 0))).padStart(2, "0");
       const validM = String(Math.max(0, Math.min(59, parseInt(nextM, 10) || 0))).padStart(2, "0");
+      latestHourRef.current = validH;
+      latestMinuteRef.current = validM;
       setHourVal(validH);
       setMinuteVal(validM);
       onChange(`${validH}:${validM}`);
@@ -50,6 +60,7 @@ export const TimeInput24: React.FC<TimeInput24Props> = ({
 
     if (e.key === "ArrowRight") {
       e.preventDefault();
+      hourBufferRef.current = "";
       minuteRef.current?.focus();
       minuteRef.current?.select();
       return;
@@ -57,45 +68,58 @@ export const TimeInput24: React.FC<TimeInput24Props> = ({
 
     if (e.key === "ArrowUp" || e.key === "ArrowDown") {
       e.preventDefault();
+      hourBufferRef.current = "";
       const delta = e.key === "ArrowUp" ? 1 : -1;
-      const currentH = parseInt(hourVal, 10) || 0;
+      const currentH = parseInt(latestHourRef.current, 10) || 0;
       const nextH = String((currentH + delta + 24) % 24).padStart(2, "0");
-      commitTime(nextH, minuteVal);
-      setHourFlag(false);
+      commitTime(nextH, latestMinuteRef.current);
       return;
     }
 
     if (e.key === "Backspace") {
       e.preventDefault();
-      setHourVal("00");
-      commitTime("00", minuteVal);
-      setHourFlag(false);
+      hourBufferRef.current = "";
+      commitTime("00", latestMinuteRef.current);
       return;
     }
 
     if (e.key >= "0" && e.key <= "9") {
       e.preventDefault();
-      const num = parseInt(e.key, 10);
-      if (!hourFlag) {
-        // First character typed
+      const digit = e.key;
+      const buffer = hourBufferRef.current;
+
+      if (!buffer) {
+        // First digit typed
+        const num = parseInt(digit, 10);
         if (num > 2) {
-          // Numbers 3-9 cannot start a 2-digit 24h hour, so treat as "0X" and jump to minutes
-          const nextH = `0${num}`;
-          commitTime(nextH, minuteVal);
-          setHourFlag(false);
+          // Numbers 3-9 cannot start a 2-digit 24h hour (max 23).
+          // Immediately commit "03".."09" and jump focus to minutes.
+          const nextH = `0${digit}`;
+          hourBufferRef.current = "";
+          commitTime(nextH, latestMinuteRef.current);
           minuteRef.current?.focus();
           minuteRef.current?.select();
         } else {
-          setHourVal(`0${num}`);
-          commitTime(`0${num}`, minuteVal);
-          setHourFlag(true);
+          // Numbers 0, 1, 2: store first digit in buffer, preview "0X" and wait for second digit.
+          hourBufferRef.current = digit;
+          setHourVal(`0${digit}`);
+          commitTime(`0${digit}`, latestMinuteRef.current);
         }
       } else {
-        // Second character typed
-        const combined = parseInt(hourVal[1] + e.key, 10);
-        const nextH = combined <= 23 ? String(combined).padStart(2, "0") : `0${num}`;
-        commitTime(nextH, minuteVal);
-        setHourFlag(false);
+        // Second digit typed! Combine buffer + second digit (e.g. '1' + '8' = '18').
+        const firstDigit = buffer;
+        const combined = parseInt(firstDigit + digit, 10);
+        hourBufferRef.current = "";
+
+        if (combined <= 23) {
+          const nextH = String(combined).padStart(2, "0");
+          commitTime(nextH, latestMinuteRef.current);
+        } else {
+          // If out of range (e.g. buffer was '2' and user typed '5' -> 25 > 23), set '05'.
+          commitTime(`0${digit}`, latestMinuteRef.current);
+        }
+
+        // Advance to minutes input
         minuteRef.current?.focus();
         minuteRef.current?.select();
       }
@@ -107,6 +131,7 @@ export const TimeInput24: React.FC<TimeInput24Props> = ({
 
     if (e.key === "ArrowLeft") {
       e.preventDefault();
+      minuteBufferRef.current = "";
       hourRef.current?.focus();
       hourRef.current?.select();
       return;
@@ -114,40 +139,52 @@ export const TimeInput24: React.FC<TimeInput24Props> = ({
 
     if (e.key === "ArrowUp" || e.key === "ArrowDown") {
       e.preventDefault();
+      minuteBufferRef.current = "";
       const delta = e.key === "ArrowUp" ? 5 : -5;
-      const currentM = parseInt(minuteVal, 10) || 0;
+      const currentM = parseInt(latestMinuteRef.current, 10) || 0;
       const nextM = String((Math.round(currentM / 5) * 5 + delta + 60) % 60).padStart(2, "0");
-      commitTime(hourVal, nextM);
-      setMinuteFlag(false);
+      commitTime(latestHourRef.current, nextM);
       return;
     }
 
     if (e.key === "Backspace") {
       e.preventDefault();
-      setMinuteVal("00");
-      commitTime(hourVal, "00");
-      setMinuteFlag(false);
+      minuteBufferRef.current = "";
+      commitTime(latestHourRef.current, "00");
       return;
     }
 
     if (e.key >= "0" && e.key <= "9") {
       e.preventDefault();
-      const num = parseInt(e.key, 10);
-      if (!minuteFlag) {
+      const digit = e.key;
+      const buffer = minuteBufferRef.current;
+
+      if (!buffer) {
+        // First digit typed
+        const num = parseInt(digit, 10);
         if (num > 5) {
-          const nextM = `0${num}`;
-          commitTime(hourVal, nextM);
-          setMinuteFlag(false);
+          // Numbers 6-9 cannot start a 2-digit minute (max 59).
+          const nextM = `0${digit}`;
+          minuteBufferRef.current = "";
+          commitTime(latestHourRef.current, nextM);
         } else {
-          setMinuteVal(`0${num}`);
-          commitTime(hourVal, `0${num}`);
-          setMinuteFlag(true);
+          // Numbers 0-5: store first digit in buffer, preview "0X", wait for second digit.
+          minuteBufferRef.current = digit;
+          setMinuteVal(`0${digit}`);
+          commitTime(latestHourRef.current, `0${digit}`);
         }
       } else {
-        const combined = parseInt(minuteVal[1] + e.key, 10);
-        const nextM = combined <= 59 ? String(combined).padStart(2, "0") : `0${num}`;
-        commitTime(hourVal, nextM);
-        setMinuteFlag(false);
+        // Second digit typed!
+        const firstDigit = buffer;
+        const combined = parseInt(firstDigit + digit, 10);
+        minuteBufferRef.current = "";
+
+        if (combined <= 59) {
+          const nextM = String(combined).padStart(2, "0");
+          commitTime(latestHourRef.current, nextM);
+        } else {
+          commitTime(latestHourRef.current, `0${digit}`);
+        }
       }
     }
   };
@@ -156,13 +193,15 @@ export const TimeInput24: React.FC<TimeInput24Props> = ({
     e.preventDefault();
     const delta = e.deltaY < 0 ? 1 : -1;
     if (type === "hour") {
-      const currentH = parseInt(hourVal, 10) || 0;
+      hourBufferRef.current = "";
+      const currentH = parseInt(latestHourRef.current, 10) || 0;
       const nextH = String((currentH + delta + 24) % 24).padStart(2, "0");
-      commitTime(nextH, minuteVal);
+      commitTime(nextH, latestMinuteRef.current);
     } else {
-      const currentM = parseInt(minuteVal, 10) || 0;
+      minuteBufferRef.current = "";
+      const currentM = parseInt(latestMinuteRef.current, 10) || 0;
       const nextM = String((Math.round(currentM / 5) * 5 + delta * 5 + 60) % 60).padStart(2, "0");
-      commitTime(hourVal, nextM);
+      commitTime(latestHourRef.current, nextM);
     }
   };
 
@@ -183,10 +222,13 @@ export const TimeInput24: React.FC<TimeInput24Props> = ({
         value={hourVal}
         disabled={disabled}
         onFocus={() => {
+          hourBufferRef.current = "";
           hourRef.current?.select();
-          setHourFlag(false);
         }}
-        onBlur={() => commitTime(hourVal, minuteVal)}
+        onBlur={() => {
+          hourBufferRef.current = "";
+          commitTime(latestHourRef.current, latestMinuteRef.current);
+        }}
         onChange={() => {}}
         onKeyDown={handleHourKeyDown}
         onWheel={(e) => handleWheel("hour", e)}
@@ -201,10 +243,13 @@ export const TimeInput24: React.FC<TimeInput24Props> = ({
         value={minuteVal}
         disabled={disabled}
         onFocus={() => {
+          minuteBufferRef.current = "";
           minuteRef.current?.select();
-          setMinuteFlag(false);
         }}
-        onBlur={() => commitTime(hourVal, minuteVal)}
+        onBlur={() => {
+          minuteBufferRef.current = "";
+          commitTime(latestHourRef.current, latestMinuteRef.current);
+        }}
         onChange={() => {}}
         onKeyDown={handleMinuteKeyDown}
         onWheel={(e) => handleWheel("minute", e)}
