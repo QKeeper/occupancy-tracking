@@ -22,7 +22,8 @@ import { Label } from "@/components/ui/label";
 import { TimeInput24 } from "@/components/ui/time-input-24";
 import { format } from "date-fns";
 import { ru } from "date-fns/locale/ru";
-import { Sparkles, Clock, AlertCircle } from "lucide-react";
+import { Clock, AlertCircle, Circle } from "lucide-react";
+import { TintedPatternIcon } from "@/lib/timeline-pattern";
 import { toast } from "sonner";
 
 export interface CreateTimeRangeModalProps {
@@ -94,6 +95,11 @@ export const CreateTimeRangeModal: React.FC<CreateTimeRangeModalProps> = ({
   const isTooShort = durationMin < 30;
 
   const durationHours = Math.floor(durationMin / 60);
+  const eventsGroup = groups.find((g) => g.id === "events" || g.id === "single");
+  const eventsBgColor = eventsGroup?.style?.bgColor || "#6366f1";
+  const eventsPatternColor = eventsGroup?.style?.patternColor || "#a5b4fc";
+  const eventsSymbol = eventsGroup?.style?.symbol || "✨";
+
   const durationRemainingMins = durationMin % 60;
   let durationLabel = "";
   if (durationHours > 0) {
@@ -138,19 +144,15 @@ export const CreateTimeRangeModal: React.FC<CreateTimeRangeModalProps> = ({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4 py-2">
+        <div className="space-y-4">
           {/* Настройка времени */}
           <div className="space-y-1.5">
             <Label className="text-xs font-medium">Время интервала</Label>
 
-            <div className="flex items-center gap-2.5">
-              <div className="w-28">
-                <TimeInput24 value={startTime} onChange={setStartTime} />
-              </div>
+            <div className="flex items-center gap-2">
+              <TimeInput24 value={startTime} onChange={setStartTime} />
               <span className="text-muted-foreground font-mono font-medium">–</span>
-              <div className="w-28">
-                <TimeInput24 value={endTime} onChange={setEndTime} allow24={true} />
-              </div>
+              <TimeInput24 value={endTime} onChange={setEndTime} allow24={true} />
               {isOvernight && (
                 <span className="text-[10px] text-muted-foreground/80 font-normal px-1.5 py-0.5 rounded bg-muted/60">
                   +1 день
@@ -185,22 +187,29 @@ export const CreateTimeRangeModal: React.FC<CreateTimeRangeModalProps> = ({
                 }`}
               >
                 <div className="flex items-center gap-2.5">
-                  <div className="size-6 rounded-md bg-indigo-500/20 text-indigo-400 flex items-center justify-center shrink-0">
-                    <Sparkles className="size-3.5" />
+                  <div
+                    className="size-6 rounded-md flex items-center justify-center shrink-0 shadow-xs overflow-hidden"
+                    style={{ backgroundColor: eventsBgColor }}
+                  >
+                    <TintedPatternIcon
+                      symbol={getImageSrc(eventsSymbol)}
+                      color={eventsPatternColor}
+                      size={14}
+                    />
                   </div>
                   <div className="text-xs font-semibold text-foreground">
                     Без категории
                   </div>
                 </div>
                 <div
-                  className={`size-4 rounded-full border flex items-center justify-center shrink-0 ${
+                  className={`size-4 rounded-full border flex items-center justify-center shrink-0 transition-colors ${
                     selectedGroupId === "events"
-                      ? "border-primary bg-primary"
+                      ? "border-primary"
                       : "border-muted-foreground/40"
                   }`}
                 >
                   {selectedGroupId === "events" && (
-                    <div className="size-1.5 rounded-full bg-primary-foreground" />
+                    <Circle className="size-2 fill-primary text-primary shrink-0" />
                   )}
                 </div>
               </button>
@@ -208,8 +217,7 @@ export const CreateTimeRangeModal: React.FC<CreateTimeRangeModalProps> = ({
               {/* Существующие группы пользователя */}
               {groups.filter((g) => g.id !== "events" && g.id !== "single").map((g) => {
                 const isSelected = selectedGroupId === g.id;
-                const sym = g.style.symbol;
-                const isImg = isImageSymbol(sym);
+                const sym = g.style.symbol || "⚡";
                 return (
                   <button
                     key={g.id}
@@ -223,30 +231,26 @@ export const CreateTimeRangeModal: React.FC<CreateTimeRangeModalProps> = ({
                   >
                     <div className="flex items-center gap-2.5">
                       <div
-                        className="size-6 rounded-md flex items-center justify-center text-white shrink-0 text-xs shadow-xs overflow-hidden"
+                        className="size-6 rounded-md flex items-center justify-center shrink-0 shadow-xs overflow-hidden"
                         style={{ backgroundColor: g.style.bgColor }}
                       >
-                        {isImg ? (
-                          <img
-                            src={getImageSrc(sym)}
-                            alt=""
-                            className="size-4 object-contain"
-                          />
-                        ) : (
-                          <span>{sym || "•"}</span>
-                        )}
+                        <TintedPatternIcon
+                          symbol={getImageSrc(sym)}
+                          color={g.style.patternColor}
+                          size={14}
+                        />
                       </div>
                       <div className="text-xs font-semibold text-foreground">{g.name}</div>
                     </div>
                     <div
-                      className={`size-4 rounded-full border flex items-center justify-center shrink-0 ${
+                      className={`size-4 rounded-full border flex items-center justify-center shrink-0 transition-colors ${
                         isSelected
-                          ? "border-primary bg-primary"
+                          ? "border-primary"
                           : "border-muted-foreground/40"
                       }`}
                     >
                       {isSelected && (
-                        <div className="size-1.5 rounded-full bg-primary-foreground" />
+                        <Circle className="size-2 fill-primary text-primary shrink-0" />
                       )}
                     </div>
                   </button>
