@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useRef, useCallback } from "react"
 import { User, Group, DayOverride } from "@/types";
 import { OccupancyCalendarGrid } from "@/components/OccupancyCalendarGrid";
 import { TimelineGroupsModal } from "@/components/TimelineGroupsModal";
+import { FeedbackModal } from "@/components/FeedbackModal";
 import { DayOverrideModal } from "@/components/DayOverrideModal";
 import { CreateGroupModal, GroupSettingsModal } from "@/components/GroupModals";
 import { GroupInviteModal } from "@/components/GroupInviteModal";
@@ -44,6 +45,7 @@ import {
   Bot,
   Globe,
   Layers,
+  MessageSquarePlus,
   ShieldCheck,
   Crown,
 } from "lucide-react";
@@ -242,6 +244,7 @@ export function App() {
     tab: "members" | "settings";
   }>({ open: false, tab: "members" });
   const [cabinetModalOpen, setCabinetModalOpen] = useState(false);
+  const [feedbackModalOpen, setFeedbackModalOpen] = useState(false);
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [authUsername, setAuthUsername] = useState("");
   const [overrideTarget, setOverrideTarget] = useState<{
@@ -967,7 +970,8 @@ export function App() {
             setAuthModalOpen(true);
           }}
           onClose={handleCloseInvite}
-        />
+      />
+
         </div>
       </div>
     );
@@ -1094,13 +1098,24 @@ export function App() {
           </Button>
 
           <Button
-            variant="outline"
+            variant="ghost"
+            size="sm"
+            onClick={() => setFeedbackModalOpen(true)}
+            data-testid="toggle-feedback-view"
+            className="w-full justify-start text-xs font-medium"
+          >
+            <MessageSquarePlus className="size-3.5 text-primary" />
+            Обратная связь
+          </Button>
+
+          <Button
+            variant="ghost"
             size="sm"
             onClick={() => setProfileModalOpen(true)}
             className="w-full justify-start text-xs font-medium"
           >
             <Layers className="size-3.5 text-primary" />
-            Группы таймлайнов
+            Моё расписание
           </Button>
 
           <Button
@@ -1407,6 +1422,12 @@ export function App() {
           setAuthModalOpen(true);
         }}
         onClose={handleCloseInvite}
+      />
+
+      <FeedbackModal
+        open={feedbackModalOpen}
+        onOpenChange={setFeedbackModalOpen}
+        currentUser={currentUser}
       />
 
       <AuthModal

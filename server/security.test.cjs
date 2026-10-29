@@ -459,6 +459,64 @@ test('sessions, password migration, permissions, validation and concurrent saves
       assert.ok(sleepGroup.overrides['2026-11-10']);
       assert.equal(sleepGroup.overrides['2026-11-10'].slots[0].start,'22:00');
     });
+    await t.test('feedback tickets can be created with tags, liked, commented, and deleted by owner or admin',async()=>{
+      const bUser = await call('POST','/api/auth/login',{username:'member_user',password:secret});
+      assert.equal(bUser.status,200);
+
+      // User 'a' creates a feedback ticket
+      const created = await call('POST','/api/feedback',{
+        title:'Добавить темную тему для мобилок',
+        message:'Пожалуйста, сделайте тему удобнее на смартфонах',
+        tags:['предложения','баги']
+      },a.cookies);
+      assert.equal(created.status,201);
+      assert.equal(created.data.title,'Добавить темную тему для мобилок');
+      assert.deepEqual(created.data.tags,['предложения','баги']);
+      assert.equal(created.data.status,'open');
+      assert.equal(created.data.likes_count,0);
+
+      // User 'b' lists feedback tickets
+      const list = await call('GET','/api/feedback',undefined,bUser.cookies);
+      assert.equal(list.status,200);
+      assert.ok(list.data.some(f => f.id === created.data.id));
+
+      // User 'b' filters by tag 'баги'
+      const filtered = await call('GET','/api/feedback?tag=баги',undefined,bUser.cookies);
+      assert.equal(filtered.status,200);
+      assert.ok(filtered.data.some(f => f.id === created.data.id));
+
+      // User 'b' likes the feedback
+      const like = await call('POST',`/api/feedback/${created.data.id}/like`,{},bUser.cookies);
+      assert.equal(like.status,200);
+      assert.equal(like.data.liked,true);
+      assert.equal(like.data.likes_count,1);
+
+      // User 'b' adds a comment
+      const comment = await call('POST',`/api/feedback/${created.data.id}/comments`,{
+        message:'Полностью поддерживаю!'
+      },bUser.cookies);
+      assert.equal(comment.status,201);
+      assert.equal(comment.data.message,'Полностью поддерживаю!');
+
+      // A regular non-admin user cannot delete user 'a's feedback
+      const nonAdmin = await call('POST','/api/auth/register',{
+        username:'fan_feedback',
+        display_name:'Fan',
+        password:secret,
+        avatar_color:'#10B981'
+      });
+      assert.equal(nonAdmin.status,200);
+      const unauthorizedDel = await call('DELETE',`/api/feedback/${created.data.id}`,undefined,nonAdmin.cookies);
+      assert.equal(unauthorizedDel.status,403);
+
+      // User 'a' (the owner) deletes their own feedback -> succeeds
+      const authorizedDel = await call('DELETE',`/api/feedback/${created.data.id}`,undefined,a.cookies);
+      assert.equal(authorizedDel.status,200);
+
+      // Feedback should now be gone
+      const listAfter = await call('GET','/api/feedback',undefined,a.cookies);
+      assert.ok(!listAfter.data.some(f => f.id === created.data.id));
+    });
   } finally {
     if(child && child.exitCode===null){ child.kill(); await new Promise(r=>child.once('exit',r)); }
     await admin.query(`DROP SCHEMA "${schema}" CASCADE`);

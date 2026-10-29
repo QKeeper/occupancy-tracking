@@ -130,3 +130,33 @@ export interface ComputedDaySchedule {
   busyHoursCount: number;
   freeIntervals: { start: string; end: string; durationHours: number }[];
 }
+
+export interface FeedbackComment {
+  id: number;
+  feedback_id: number;
+  user_id: number;
+  author_name: string;
+  author_username: string;
+  author_avatar_color: string;
+  author_avatar_url: string | null;
+  message: string;
+  created_at: string;
+}
+
+export interface FeedbackItem {
+  id: number;
+  user_id: number;
+  author_name: string;
+  author_username: string;
+  author_avatar_color: string;
+  author_avatar_url: string | null;
+  title: string;
+  message: string;
+  tags: string[];
+  status: "open" | "closed";
+  created_at: string;
+  likes_count: number;
+  has_liked: boolean;
+  comments_count: number;
+  comments: FeedbackComment[];
+}

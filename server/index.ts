@@ -6,6 +6,7 @@ import { initAuth, installAuth, issueSession, hashPassword, verifyPassword } fro
 import { installUserRoutes } from "./user-routes";
 import { installGroupRoutes, generateInviteCode, HttpError } from "./group-routes";
 import { initAdmin, installAdminRoutes, isSuperAdminUsername, recordUserActivity } from "./admin-routes";
+import { initFeedback, installFeedbackRoutes } from "./feedback-routes";
 import { usernameSchema, passwordSchema, timeZoneSchema } from "./validation";
 import dotenv from "dotenv";
 import pg from "pg";
@@ -172,6 +173,7 @@ async function initDb() {
     await migrateManualOverrides(client);
     await initAdmin(client);
     await patternMedia.migrate(client);
+    await initFeedback(client);
 
     // Initialize default timeline groups for existing users who do not have any groups configured
     const { rows: usersWithoutGroups } = await client.query(
@@ -236,6 +238,7 @@ installAdminRoutes(app, pool, uploadsDir, broadcastUpdate);
 installUserRoutes(app, pool, broadcastUpdate, saveDataUrlAsImageFile, patternMedia.normalizeStyle);
 patternMedia.install(app);
 installGroupRoutes(app, pool, broadcastUpdate);
+installFeedbackRoutes(app, pool, broadcastUpdate);
 
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
