@@ -25,7 +25,7 @@ echo "📦 Pulling latest changes from branch main..."
 git fetch origin main || true
 CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 if [ "$CURRENT_BRANCH" = "main" ]; then
-  git pull origin main
+  git reset --hard origin/main
 fi
 
 # Check deployment mode: systemd (occupancy-tracking), PM2, or Docker
