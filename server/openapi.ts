@@ -767,6 +767,113 @@ export function getOpenApiSpec(baseUrl = "http://localhost:5173") {
           },
         },
       },
+      "/api/groups/{groupId}/reset-invite": {
+        post: {
+          tags: ["Groups"],
+          operationId: "resetGroupInviteCode",
+          summary: "Сбросить и сгенерировать новую ссылку-приглашение в группу (только владелец)",
+          parameters: [
+            {
+              name: "groupId",
+              in: "path",
+              required: true,
+              schema: { type: "integer", example: 1 },
+            },
+          ],
+          responses: {
+            "200": {
+              description: "Новый код приглашения создан",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      ok: { type: "boolean" },
+                      id: { type: "integer" },
+                      invite_code: { type: "string" },
+                    },
+                  },
+                },
+              },
+            },
+            "403": { description: "Доступно только владельцу группы" },
+          },
+        },
+      },
+      "/api/invites/{code}": {
+        get: {
+          tags: ["Groups"],
+          operationId: "getGroupInvitePreview",
+          summary: "Получить общедоступную информацию о группе по коду приглашения",
+          parameters: [
+            {
+              name: "code",
+              in: "path",
+              required: true,
+              schema: { type: "string", example: "x8NmK2pQ" },
+            },
+          ],
+          responses: {
+            "200": {
+              description: "Информация о приглашении в группу",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      id: { type: "integer" },
+                      name: { type: "string" },
+                      description: { type: "string" },
+                      invite_code: { type: "string" },
+                      owner: { type: "object" },
+                      members_count: { type: "integer" },
+                      members_preview: { type: "array" },
+                      my_status: { type: ["string", "null"] },
+                    },
+                  },
+                },
+              },
+            },
+            "404": { description: "Приглашение не найдено или устарело" },
+          },
+        },
+      },
+      "/api/invites/{code}/join": {
+        post: {
+          tags: ["Groups"],
+          operationId: "joinGroupByInvite",
+          summary: "Принять приглашение и вступить в группу по ссылке",
+          parameters: [
+            {
+              name: "code",
+              in: "path",
+              required: true,
+              schema: { type: "string", example: "x8NmK2pQ" },
+            },
+          ],
+          responses: {
+            "200": {
+              description: "Успешное вступление в группу",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      ok: { type: "boolean" },
+                      group_id: { type: "integer" },
+                      status: { type: "string", example: "accepted" },
+                      already_member: { type: "boolean" },
+                      message: { type: "string" },
+                    },
+                  },
+                },
+              },
+            },
+            "401": { description: "Необходима авторизация" },
+            "404": { description: "Приглашение не найдено" },
+          },
+        },
+      },
       "/api/openapi.json": {
         get: {
           tags: ["System & Meta"],
@@ -956,6 +1063,7 @@ export function getOpenApiSpec(baseUrl = "http://localhost:5173") {
             description: { type: "string", example: "Совместные игры и встречи" },
             owner_id: { type: "integer", example: 1 },
             owner_username: { type: "string", example: "alex" },
+            invite_code: { type: "string", example: "x8NmK2pQ" },
             my_status: { type: ["string", "null"], enum: ["accepted", "pending", null] },
             members: {
               type: "array",

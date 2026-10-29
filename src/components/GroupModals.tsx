@@ -13,9 +13,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import {
+  Check,
   Clock,
+  Copy,
   Crown,
+  Link2,
   LogOut,
+  RefreshCw,
   Trash2,
   UserMinus,
   UserPlus,
@@ -204,6 +208,44 @@ export const GroupSettingsModal: React.FC<GroupSettingsModalProps> = ({
   const [groupDesc, setGroupDesc] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [resettingInvite, setResettingInvite] = useState(false);
+
+  const inviteUrl = typeof window !== "undefined" && group?.invite_code
+    ? `${window.location.origin}/invite/${group.invite_code}`
+    : "";
+
+  const handleCopyInviteLink = async () => {
+    if (!inviteUrl) return;
+    try {
+      await navigator.clipboard.writeText(inviteUrl);
+      setCopied(true);
+      toast.success("Ссылка-приглашение скопирована");
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast.error("Не удалось скопировать ссылку");
+    }
+  };
+
+  const handleResetInviteCode = async () => {
+    if (!group || group.owner_id !== currentUser.id || resettingInvite) return;
+    setResettingInvite(true);
+    try {
+      const res = await fetch(`/api/groups/${group.id}/reset-invite`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Не удалось обновить ссылку");
+      toast.success("Ссылка-приглашение обновлена");
+      await onGroupUpdated();
+    } catch (err: any) {
+      toast.error(err.message);
+    } finally {
+      setResettingInvite(false);
+    }
+  };
 
   useEffect(() => {
     if (group && open) {
@@ -425,12 +467,65 @@ export const GroupSettingsModal: React.FC<GroupSettingsModalProps> = ({
                       Участники группы «{group.name}»
                     </DialogTitle>
                     <DialogDescription className="text-xs">
-                      Приглашайте участников по @username и управляйте составом группы
+                      Приглашайте участников по ссылке или @username и управляйте составом группы
                     </DialogDescription>
                   </div>
 
+                  {/* Ссылка-приглашение в стиле Discord */}
+                  <div className="space-y-1.5 p-3 rounded-lg border border-border bg-muted/30 shrink-0">
+                    <div className="flex items-center justify-between">
+                      <Label className="text-xs font-medium flex items-center gap-1.5 text-foreground">
+                        <Link2 className="size-3.5 text-primary" />
+                        <span>Ссылка-приглашение в группу</span>
+                      </Label>
+                      {isOwner && (
+                        <button
+                          type="button"
+                          onClick={handleResetInviteCode}
+                          disabled={resettingInvite || loading}
+                          title="Сгенерировать новую ссылку (старая перестанет работать)"
+                          className="text-[11px] text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors cursor-pointer disabled:opacity-50"
+                        >
+                          <RefreshCw className={`size-3 ${resettingInvite ? "animate-spin" : ""}`} />
+                          <span>Сбросить ссылку</span>
+                        </button>
+                      )}
+                    </div>
+                    <div className="flex gap-2">
+                      <Input
+                        readOnly
+                        value={inviteUrl}
+                        onFocus={(e) => e.target.select()}
+                        placeholder={group.invite_code ? "Загрузка ссылки..." : "Нет ссылки"}
+                        className="font-mono text-xs bg-background selection:bg-primary/20"
+                      />
+                      <Button
+                        type="button"
+                        variant={copied ? "default" : "secondary"}
+                        onClick={handleCopyInviteLink}
+                        disabled={!inviteUrl}
+                        className="shrink-0 text-xs gap-1.5"
+                      >
+                        {copied ? (
+                          <>
+                            <Check className="size-3.5" />
+                            <span>Скопировано</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="size-3.5" />
+                            <span>Копировать</span>
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground">
+                      Отправьте ссылку друзьям — они смогут присоединиться к вашей группе в один клик
+                    </p>
+                  </div>
+
                   <form onSubmit={handleInvite} className="space-y-1.5 shrink-0">
-                    <Label>Пригласить участника по @username</Label>
+                    <Label>Или пригласите по @username</Label>
                     <div className="flex gap-2">
                       <Input
                         value={usernameInput}

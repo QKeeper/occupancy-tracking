@@ -261,6 +261,60 @@ test('sessions, password migration, permissions, validation and concurrent saves
       assert.equal((await call('POST',`/api/groups/${gid}/respond`,{action:'decline'},b.cookies)).status,409);
       assert.equal((await call('DELETE',`/api/groups/${gid}`,{},b.cookies)).status,200);
     });
+    await t.test('group invite deep links preview, join, reset and prevent unauthorized resets',async()=>{
+      const created=await call('POST','/api/groups',{name:'Invite Group',owner_id:a.data.id},a.cookies);
+      assert.equal(created.status,200);
+      const gid=created.data.id;
+      const initialCode=created.data.invite_code;
+      assert.ok(initialCode && initialCode.length>=8);
+
+      // Public preview without authentication
+      const previewAnon=await call('GET',`/api/invites/${initialCode}`);
+      assert.equal(previewAnon.status,200);
+      assert.equal(previewAnon.data.name,'Invite Group');
+      assert.equal(previewAnon.data.owner.username,a.data.username);
+      assert.equal(previewAnon.data.my_status,null);
+      assert.equal(previewAnon.data.members_count,1);
+
+      // Preview with authenticated member
+      const previewA=await call('GET',`/api/invites/${initialCode}`,undefined,a.cookies);
+      assert.equal(previewA.status,200);
+      assert.equal(previewA.data.my_status,'accepted');
+
+      // Non-owner cannot reset invite code
+      assert.equal((await call('POST',`/api/groups/${gid}/reset-invite`,{},b.cookies)).status,403);
+
+      // User C joins via invite link
+      const joinC=await call('POST',`/api/invites/${initialCode}/join`,{},c.cookies);
+      assert.equal(joinC.status,200);
+      assert.equal(joinC.data.ok,true);
+
+      // User C joins again -> already member
+      const joinCAgain=await call('POST',`/api/invites/${initialCode}/join`,{},c.cookies);
+      assert.equal(joinCAgain.status,200);
+      assert.equal(joinCAgain.data.already_member,true);
+
+      // Owner resets invite code
+      const resetRes=await call('POST',`/api/groups/${gid}/reset-invite`,{},a.cookies);
+      assert.equal(resetRes.status,200);
+      const newCode=resetRes.data.invite_code;
+      assert.ok(newCode && newCode!==initialCode);
+
+      // Old invite code now gives 404
+      assert.equal((await call('GET',`/api/invites/${initialCode}`)).status,404);
+      assert.equal((await call('POST',`/api/invites/${initialCode}/join`,{},b.cookies)).status,404);
+
+      // New invite code works
+      const previewNew=await call('GET',`/api/invites/${newCode}`);
+      assert.equal(previewNew.status,200);
+      assert.equal(previewNew.data.members_count,2);
+
+      // User B joins via new invite code
+      assert.equal((await call('POST',`/api/invites/${newCode}/join`,{},b.cookies)).status,200);
+
+      // Clean up group
+      assert.equal((await call('DELETE',`/api/groups/${gid}`,{},a.cookies)).status,200);
+    });
     await t.test('cross-origin writes and expired/revoked sessions fail',async()=>{
       assert.equal((await call('POST','/api/groups',{name:'x'},a.cookies,{Origin:'https://evil.example'})).status,403);
       const expired=crypto.randomBytes(32).toString('hex');

@@ -4,7 +4,7 @@ import { USER_COLUMNS } from "./user-routes";
 import { createPatternMedia } from "./pattern-media";
 import { initAuth, installAuth, issueSession, hashPassword, verifyPassword } from "./auth";
 import { installUserRoutes } from "./user-routes";
-import { installGroupRoutes, HttpError } from "./group-routes";
+import { installGroupRoutes, generateInviteCode, HttpError } from "./group-routes";
 import { initAdmin, installAdminRoutes, isSuperAdminUsername, recordUserActivity } from "./admin-routes";
 import { usernameSchema, passwordSchema, timeZoneSchema } from "./validation";
 import dotenv from "dotenv";
@@ -131,6 +131,7 @@ async function initDb() {
         name VARCHAR(128) NOT NULL,
         description TEXT DEFAULT '',
         owner_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        invite_code VARCHAR(32) UNIQUE,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
 
@@ -147,6 +148,25 @@ async function initDb() {
       CREATE INDEX IF NOT EXISTS idx_group_members_group_id ON group_members(group_id);
       CREATE INDEX IF NOT EXISTS idx_users_lower_username ON users(LOWER(username));
     `);
+
+    await client.query("ALTER TABLE groups ADD COLUMN IF NOT EXISTS invite_code VARCHAR(32) UNIQUE");
+
+    // Backfill invite codes for existing groups if missing
+    const { rows: groupsWithoutCodes } = await client.query(
+      "SELECT id FROM groups WHERE invite_code IS NULL"
+    );
+    for (const g of groupsWithoutCodes) {
+      let assigned = false;
+      while (!assigned) {
+        const code = generateInviteCode();
+        try {
+          await client.query("UPDATE groups SET invite_code = $1 WHERE id = $2", [code, g.id]);
+          assigned = true;
+        } catch (e: any) {
+          if (e.code !== "23505") throw e;
+        }
+      }
+    }
 
     await initAuth(client);
     await migrateManualOverrides(client);

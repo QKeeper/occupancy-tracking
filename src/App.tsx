@@ -4,6 +4,7 @@ import { OccupancyCalendarGrid } from "@/components/OccupancyCalendarGrid";
 import { TimelineGroupsModal } from "@/components/TimelineGroupsModal";
 import { DayOverrideModal } from "@/components/DayOverrideModal";
 import { CreateGroupModal, GroupSettingsModal } from "@/components/GroupModals";
+import { GroupInviteModal } from "@/components/GroupInviteModal";
 import { AgentApiView } from "@/components/AgentApiView";
 import { AdminDashboardView } from "@/components/AdminDashboardView";
 import {
@@ -104,6 +105,12 @@ export function App() {
     return saved ? parseInt(saved, 10) : null;
   });
   const [loading, setLoading] = useState(true);
+  const [inviteCode, setInviteCode] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    const pathMatch = window.location.pathname.match(/^\/(?:invite|join)\/([a-zA-Z0-9_-]+)/);
+    const searchCode = new URLSearchParams(window.location.search).get("invite");
+    return pathMatch ? pathMatch[1] : searchCode;
+  });
 
   // Unauthenticated screen form states
   const [loginUsername, setLoginUsername] = useState("");
@@ -617,6 +624,27 @@ export function App() {
     }
   };
 
+  const handleCloseInvite = useCallback(() => {
+    setInviteCode(null);
+    if (typeof window !== "undefined") {
+      if (window.location.pathname.startsWith("/invite/") || window.location.pathname.startsWith("/join/")) {
+        window.history.replaceState({}, "", "/");
+      } else if (new URLSearchParams(window.location.search).has("invite")) {
+        const url = new URL(window.location.href);
+        url.searchParams.delete("invite");
+        window.history.replaceState({}, "", url.pathname + (url.search ? url.search : ""));
+      }
+    }
+  }, []);
+
+  const handleJoinedGroupFromInvite = useCallback(async (joinedGroupId: number) => {
+    handleCloseInvite();
+    setActiveGroupId(joinedGroupId);
+    localStorage.setItem(STORAGE_GROUP_ID_KEY, String(joinedGroupId));
+    setSelectedMemberIds([]);
+    await fetchAllData(currentUserRef.current?.id, joinedGroupId);
+  }, [fetchAllData, handleCloseInvite]);
+
   const handleLogout = async () => {
     const response = await fetch("/api/auth/logout", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
     if (!response.ok && response.status !== 401) { toast.error("Не удалось завершить сессию"); return; }
@@ -930,6 +958,16 @@ export function App() {
               </form>
             </TabsContent>
           </Tabs>
+        <GroupInviteModal
+          inviteCode={inviteCode}
+          currentUser={currentUser}
+          onJoined={handleJoinedGroupFromInvite}
+          onOpenAuth={() => {
+            setAuthUsername("");
+            setAuthModalOpen(true);
+          }}
+          onClose={handleCloseInvite}
+        />
         </div>
       </div>
     );
@@ -1358,6 +1396,17 @@ export function App() {
         onRemoveSavedAccount={handleRemoveSavedAccount}
         onOpenAddAccount={() => { setAuthUsername(""); setAuthModalOpen(true); }}
         onLogout={handleLogout}
+      />
+
+      <GroupInviteModal
+        inviteCode={inviteCode}
+        currentUser={currentUser}
+        onJoined={handleJoinedGroupFromInvite}
+        onOpenAuth={() => {
+          setAuthUsername("");
+          setAuthModalOpen(true);
+        }}
+        onClose={handleCloseInvite}
       />
 
       <AuthModal

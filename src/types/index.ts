@@ -89,11 +89,35 @@ export interface Group {
   owner_id: number;
   owner_username?: string;
   owner_name?: string;
+  invite_code?: string;
   my_status: "accepted" | "pending" | null;
   invited_by_name?: string | null;
   invited_by_username?: string | null;
   members: GroupMember[];
   created_at?: string;
+}
+
+export interface GroupInviteInfo {
+  id: number;
+  name: string;
+  description: string;
+  invite_code: string;
+  owner: {
+    id: number;
+    name: string;
+    username: string;
+    avatar_url: string | null;
+    avatar_color: string;
+  };
+  members_count: number;
+  members_preview: {
+    user_id: number;
+    username: string;
+    display_name: string;
+    avatar_color: string;
+    avatar_url: string | null;
+  }[];
+  my_status: "accepted" | "pending" | null;
 }
 
 export interface ComputedDaySchedule {
