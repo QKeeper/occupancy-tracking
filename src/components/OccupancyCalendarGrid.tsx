@@ -1394,8 +1394,8 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
                                     : isDraggingTimeline
                                     ? "z-10 cursor-grabbing overflow-clip"
                                     : isMe
-                                    ? "z-10 cursor-pointer hover:brightness-110"
-                                    : "z-10 cursor-grab overflow-clip"
+                                    ? "z-10 hover:z-30 cursor-pointer hover:brightness-110"
+                                    : "z-10 hover:z-20 cursor-grab overflow-clip"
                                 }`}
                               >
                                 {/* Плавающий бейдж текущего времени при растягивании/сужении */}
