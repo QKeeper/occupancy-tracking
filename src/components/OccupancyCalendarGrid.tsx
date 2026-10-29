@@ -1424,35 +1424,19 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
                                     />
                                   </div>
                                 )}
-
-                                {durationMins < 120 ? (
-                                  <div className="flex flex-col justify-center leading-tight overflow-hidden pointer-events-none w-full">
-                                    <span className="text-[10px] font-mono font-medium leading-tight truncate">
-                                      {formatDuration(durationMins)}
-                                    </span>
-                                    {(block.note || block.groupName) && (
-                                      <span className="text-[10px] font-medium leading-tight truncate opacity-90">
-                                        {block.note || block.groupName}
-                                      </span>
-                                    )}
-                                  </div>
-                                ) : widthPx >= 64 ? (
-                                  <>
-                                    <span className="text-[10px] font-mono font-medium leading-none shrink-0 pointer-events-none">
-                                      {currentStartLabel}
-                                    </span>
-                                    <span className="sticky left-1.5 text-[10px] font-medium truncate opacity-95 pointer-events-none">
-                                      {block.note || block.groupName}
-                                    </span>
-                                    <span className="ml-auto text-[10px] font-mono font-medium leading-none shrink-0 pl-1 pointer-events-none">
-                                      {currentEndLabel}
-                                    </span>
-                                  </>
-                                ) : (
-                                  <span className="sticky left-1 text-[10px] font-mono font-medium leading-none truncate pointer-events-none">
-                                    {block.note || block.groupName || currentStartLabel}
-                                  </span>
-                                )}
+                                 <div className="flex flex-col justify-center leading-tight overflow-hidden pointer-events-none w-full min-w-0">
+                                   <div className="flex items-center justify-between text-[10px] font-mono font-medium leading-tight w-full">
+                                     <span className="truncate">{currentStartLabel}</span>
+                                     {widthPx >= 60 && (
+                                       <span className="shrink-0 pl-1 ml-auto">{currentEndLabel}</span>
+                                     )}
+                                   </div>
+                                   {(block.note || block.groupName) && (
+                                     <span className="text-[10px] font-medium leading-tight truncate opacity-90">
+                                       {block.note || block.groupName}
+                                     </span>
+                                   )}
+                                 </div>
 
                                 {/* Правый край для изменения времени окончания (только для своей строки) */}
                                 {isMe && (
