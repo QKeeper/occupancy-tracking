@@ -19,6 +19,9 @@ import {
   formatTimeZoneShort,
   getNowInTimeZone,
   DEFAULT_SCHEDULE_TIMEZONE,
+  applyOptimisticOverrideToUser,
+  getExpectedOverrideForGroupDate,
+  getUserTimelineGroups,
 } from "@/lib/schedule-engine";
 import { loginSchema, registerSchema, extractZodErrors } from "@/lib/validators";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -259,8 +262,142 @@ export function App() {
 
   const currentUserRef = useRef<User | null>(null);
   currentUserRef.current = currentUser;
+  const serverUserRef = useRef<User | null>(null);
+  const pendingMutationsRef = useRef<
+    Array<
+      | {
+          opId: number;
+          kind: "override";
+          dateStr: string;
+          groupId: string;
+          override: DayOverride | null;
+        }
+      | {
+          opId: number;
+          kind: "profile";
+          changes: Partial<User>;
+        }
+      | {
+          opId: number;
+          kind: "member_order";
+          groupKey: string;
+          memberIds: number[];
+        }
+    >
+  >([]);
+  const nextMutationOpIdRef = useRef<number>(1);
+  const mutationQueueRef = useRef<Promise<unknown>>(Promise.resolve());
+  const fetchAllSeqRef = useRef<number>(0);
+  const groupsFetchSeqRef = useRef<number>(0);
   const activeGroupIdRef = useRef<number | null>(activeGroupId);
   activeGroupIdRef.current = activeGroupId;
+
+  const recomputeCurrentUser = useCallback(() => {
+    const base = serverUserRef.current;
+    if (!base) {
+      currentUserRef.current = null;
+      setCurrentUser(null);
+      return;
+    }
+    let effective: User = base;
+    for (const m of pendingMutationsRef.current) {
+      if (m.kind === "override") {
+        effective = applyOptimisticOverrideToUser(
+          effective,
+          m.dateStr,
+          m.groupId,
+          m.override
+        );
+      } else if (m.kind === "profile") {
+        let nextGroups = m.changes.timeline_groups;
+        if (nextGroups) {
+          const existingGroups = getUserTimelineGroups(effective);
+          nextGroups = nextGroups.map((g) => {
+            if (g.overrides !== undefined) return g;
+            const prevG = existingGroups.find((eg) => eg.id === g.id);
+            return prevG?.overrides ? { ...g, overrides: prevG.overrides } : g;
+          });
+        }
+        effective = {
+          ...effective,
+          ...m.changes,
+          ...(nextGroups ? { timeline_groups: nextGroups } : {}),
+        };
+      } else if (m.kind === "member_order") {
+        effective = {
+          ...effective,
+          member_orders: {
+            ...(effective.member_orders || {}),
+            [m.groupKey]: m.memberIds,
+          },
+        };
+      }
+    }
+    currentUserRef.current = effective;
+    setCurrentUser(effective);
+  }, []);
+
+  const applyIncomingServerUser = useCallback(
+    (incoming: User, force = false) => {
+      const prevServer = serverUserRef.current;
+      if (prevServer && prevServer.id !== incoming.id) {
+        pendingMutationsRef.current = [];
+      }
+      if (
+        force ||
+        !prevServer ||
+        prevServer.id !== incoming.id ||
+        (incoming.revision ?? 0) >= (prevServer.revision ?? 0)
+      ) {
+        serverUserRef.current = incoming;
+      }
+      recomputeCurrentUser();
+    },
+    [recomputeCurrentUser]
+  );
+
+  const mergeIncomingGroups = useCallback((incomingGroups: Group[]) => {
+    setGroups((prevGroups) => {
+      if (prevGroups.length === 0) return incomingGroups;
+      const prevMemberByUserId = new Map<number, Group["members"][number]>();
+      for (const g of prevGroups) {
+        for (const m of g.members) {
+          const existing = prevMemberByUserId.get(m.user_id);
+          if (!existing || (m.revision ?? 0) > (existing.revision ?? 0)) {
+            prevMemberByUserId.set(m.user_id, m);
+          }
+        }
+      }
+      return incomingGroups.map((g) => ({
+        ...g,
+        members: g.members.map((m) => {
+          const prevM = prevMemberByUserId.get(m.user_id);
+          if (prevM && (prevM.revision ?? 0) > (m.revision ?? 0)) {
+            return {
+              ...m,
+              display_name: prevM.display_name,
+              avatar_color: prevM.avatar_color,
+              avatar_url: prevM.avatar_url,
+              banner_url: prevM.banner_url,
+              timeline_style: prevM.timeline_style,
+              time_zone: prevM.time_zone,
+              schedule_config: prevM.schedule_config,
+              overrides: prevM.overrides,
+              timeline_groups: prevM.timeline_groups,
+              revision: prevM.revision,
+            };
+          }
+          return m;
+        }),
+      }));
+    });
+  }, []);
+
+  const enqueueMutation = useCallback(<T,>(task: () => Promise<T>): Promise<T> => {
+    const next = mutationQueueRef.current.then(task, task);
+    mutationQueueRef.current = next.catch(() => undefined);
+    return next;
+  }, []);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_THEME_KEY, String(darkMode));
@@ -271,68 +408,110 @@ export function App() {
     }
   }, [darkMode]);
 
-  const fetchAllData = useCallback(async (preferredUserId?: number, preferredGroupId?: number) => {
-    try {
-      const uRes = await fetch("/api/auth/me");
-      const activeIdentity = uRes.ok ? await uRes.clone().json() : null;
-      const targetUserId = activeIdentity?.id;
-      const gRes = targetUserId ? await fetch(`/api/groups?userId=${targetUserId}`) : null;
+  const fetchGroupsOnly = useCallback(
+    async (preferredGroupId?: number) => {
+      const gSeq = ++groupsFetchSeqRef.current;
+      try {
+        const gRes = await fetch("/api/groups", { cache: "no-store" });
+        if (!gRes.ok || gSeq < groupsFetchSeqRef.current) return;
+        const groupsData: Group[] = await gRes.json();
+        if (gSeq < groupsFetchSeqRef.current) return;
 
-      if (!uRes.ok) {
-        // Stored user no longer exists -> log out
-        localStorage.removeItem(STORAGE_USER_ID_KEY);
-        setCurrentUser(null);
-        setGroups([]);
-        setLoading(false);
-        return;
-      }
+        mergeIncomingGroups(groupsData);
 
-      const [activeUser, groupsData]: [User, Group[]] = await Promise.all([
-        uRes.json(),
-        gRes?.ok ? gRes.json() : [],
-      ]);
-
-      setCurrentUser(activeUser);
-      localStorage.setItem(STORAGE_USER_ID_KEY, String(activeUser.id));
-
-      setSavedAccounts((prev) => {
-        const entry: SavedAccount = {
-          id: activeUser.id,
-          username: activeUser.username,
-          display_name: activeUser.display_name,
-          avatar_color: activeUser.avatar_color,
-          avatar_url: activeUser.avatar_url,
-          requiresPassword: false,
-        };
-        const existsIdx = prev.findIndex((a) => a.id === activeUser.id);
-        let next: SavedAccount[];
-        if (existsIdx >= 0) {
-          next = prev.map((a, idx) => (idx === existsIdx ? entry : a));
+        const acceptedGroups = groupsData.filter((g) => g.my_status === "accepted");
+        if (acceptedGroups.length > 0) {
+          const targetGrpId = preferredGroupId ?? activeGroupIdRef.current;
+          const stillExists = acceptedGroups.find((g) => g.id === targetGrpId);
+          const nextGroup = stillExists || acceptedGroups[0];
+          setActiveGroupId(nextGroup.id);
+          localStorage.setItem(STORAGE_GROUP_ID_KEY, String(nextGroup.id));
         } else {
-          next = [...prev, entry];
+          setActiveGroupId(null);
         }
-        persistSavedAccounts(next);
-        return next;
-      });
-
-      setGroups(groupsData);
-
-      const acceptedGroups = groupsData.filter((g) => g.my_status === "accepted");
-      if (acceptedGroups.length > 0) {
-        const targetGrpId = preferredGroupId ?? activeGroupIdRef.current;
-        const stillExists = acceptedGroups.find((g) => g.id === targetGrpId);
-        const nextGroup = stillExists || acceptedGroups[0];
-        setActiveGroupId(nextGroup.id);
-        localStorage.setItem(STORAGE_GROUP_ID_KEY, String(nextGroup.id));
-      } else {
-        setActiveGroupId(null);
+      } catch (err) {
+        console.error("Failed to fetch groups:", err);
       }
-    } catch (err) {
-      console.error("Failed to fetch data:", err);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+    },
+    [mergeIncomingGroups]
+  );
+
+  const fetchAllData = useCallback(
+    async (_preferredUserId?: number, preferredGroupId?: number) => {
+      const seq = ++fetchAllSeqRef.current;
+      const gSeq = ++groupsFetchSeqRef.current;
+      try {
+        const [uRes, gRes] = await Promise.all([
+          fetch("/api/auth/me", { cache: "no-store" }),
+          fetch("/api/groups", { cache: "no-store" }),
+        ]);
+
+        if (seq < fetchAllSeqRef.current) return;
+
+        if (!uRes.ok) {
+          // Stored user no longer exists -> log out
+          localStorage.removeItem(STORAGE_USER_ID_KEY);
+          serverUserRef.current = null;
+          pendingMutationsRef.current = [];
+          currentUserRef.current = null;
+          setCurrentUser(null);
+          setGroups([]);
+          setLoading(false);
+          return;
+        }
+
+        const [activeUser, groupsData]: [User, Group[]] = await Promise.all([
+          uRes.json(),
+          gRes.ok ? gRes.json() : [],
+        ]);
+
+        if (seq < fetchAllSeqRef.current) return;
+
+        applyIncomingServerUser(activeUser);
+        localStorage.setItem(STORAGE_USER_ID_KEY, String(activeUser.id));
+
+        setSavedAccounts((prev) => {
+          const entry: SavedAccount = {
+            id: activeUser.id,
+            username: activeUser.username,
+            display_name: activeUser.display_name,
+            avatar_color: activeUser.avatar_color,
+            avatar_url: activeUser.avatar_url,
+            requiresPassword: false,
+          };
+          const existsIdx = prev.findIndex((a) => a.id === activeUser.id);
+          let next: SavedAccount[];
+          if (existsIdx >= 0) {
+            next = prev.map((a, idx) => (idx === existsIdx ? entry : a));
+          } else {
+            next = [...prev, entry];
+          }
+          persistSavedAccounts(next);
+          return next;
+        });
+
+        if (gSeq >= groupsFetchSeqRef.current) {
+          mergeIncomingGroups(groupsData);
+
+          const acceptedGroups = groupsData.filter((g) => g.my_status === "accepted");
+          if (acceptedGroups.length > 0) {
+            const targetGrpId = preferredGroupId ?? activeGroupIdRef.current;
+            const stillExists = acceptedGroups.find((g) => g.id === targetGrpId);
+            const nextGroup = stillExists || acceptedGroups[0];
+            setActiveGroupId(nextGroup.id);
+            localStorage.setItem(STORAGE_GROUP_ID_KEY, String(nextGroup.id));
+          } else {
+            setActiveGroupId(null);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to fetch data:", err);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [applyIncomingServerUser, mergeIncomingGroups]
+  );
 
   useEffect(() => {
     fetchAllData();
@@ -371,9 +550,33 @@ export function App() {
     evtSource.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        if (data.type && data.type !== "connected" && currentUserRef.current) {
-          fetchAllData(currentUserRef.current.id);
+        if (!data.type || data.type === "connected" || !currentUserRef.current) {
+          return;
         }
+        if (data.type === "schedule_updated") {
+          const eventUserId = data.payload?.userId;
+          const eventRevision = data.payload?.revision;
+          if (eventUserId && eventUserId !== currentUserRef.current.id) {
+            // Another user edited their timeline -> refresh only groups without touching currentUser
+            void fetchGroupsOnly();
+            return;
+          }
+          if (eventUserId === currentUserRef.current.id) {
+            // Our own schedule update: skip redundant fetch if we have in-flight mutations
+            // or already have this revision from the direct HTTP response
+            if (pendingMutationsRef.current.length > 0) {
+              return;
+            }
+            if (
+              typeof eventRevision === "number" &&
+              serverUserRef.current &&
+              eventRevision <= (serverUserRef.current.revision ?? 0)
+            ) {
+              return;
+            }
+          }
+        }
+        void fetchAllData(currentUserRef.current.id);
       } catch {
         // ignore
       }
@@ -381,7 +584,7 @@ export function App() {
     return () => {
       evtSource.close();
     };
-  }, [fetchAllData, currentUser?.id]);
+  }, [fetchAllData, fetchGroupsOnly, currentUser?.id]);
 
   const activeGroup = useMemo(
     () => groups.find((g) => g.id === activeGroupId && g.my_status === "accepted") || null,
@@ -441,9 +644,11 @@ export function App() {
 
   const handleReorderMembers = useCallback(
     (newMemberIds: number[]) => {
-      if (!currentUser || !activeGroup) return;
+      const activeUser = currentUserRef.current;
+      if (!activeUser || !activeGroup) return;
+      const targetUserId = activeUser.id;
       const groupKey = String(activeGroup.id);
-      const localKey = `${currentUser.id}:${activeGroup.id}`;
+      const localKey = `${targetUserId}:${activeGroup.id}`;
 
       setMemberOrders((prev) => {
         const next = { ...prev, [localKey]: newMemberIds };
@@ -455,29 +660,44 @@ export function App() {
         return next;
       });
 
-      setCurrentUser((prev) =>
-        prev
-          ? {
-              ...prev,
-              member_orders: {
-                ...(prev.member_orders || {}),
-                [groupKey]: newMemberIds,
-              },
-            }
-          : prev
-      );
+      const opId = nextMutationOpIdRef.current++;
+      pendingMutationsRef.current = [
+        ...pendingMutationsRef.current,
+        { opId, kind: "member_order", groupKey, memberIds: newMemberIds },
+      ];
+      recomputeCurrentUser();
 
-      fetch(`/api/users/${currentUser.id}/member-order`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ groupKey, memberIds: newMemberIds }),
-      }).then(async (res) => {
-        if (!res.ok) throw new Error("Не удалось сохранить порядок участников");
-        const data = await res.json();
-        setCurrentUser(prev => prev?.id === currentUser.id ? { ...prev, revision: Math.max(prev.revision, data.revision) } : prev);
-      }).catch(() => toast.error("Не удалось сохранить порядок участников"));
+      void enqueueMutation(async () => {
+        try {
+          const res = await fetch(`/api/users/${targetUserId}/member-order`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ groupKey, memberIds: newMemberIds }),
+          });
+          if (!res.ok) throw new Error("Не удалось сохранить порядок участников");
+          const data = await res.json();
+          if (serverUserRef.current && serverUserRef.current.id === targetUserId) {
+            serverUserRef.current = {
+              ...serverUserRef.current,
+              member_orders:
+                data.member_orders ?? {
+                  ...(serverUserRef.current.member_orders || {}),
+                  [groupKey]: newMemberIds,
+                },
+              revision: Math.max(serverUserRef.current.revision ?? 0, data.revision ?? 0),
+            };
+          }
+        } catch {
+          toast.error("Не удалось сохранить порядок участников");
+        } finally {
+          pendingMutationsRef.current = pendingMutationsRef.current.filter(
+            (m) => m.opId !== opId
+          );
+          recomputeCurrentUser();
+        }
+      });
     },
-    [currentUser, activeGroup]
+    [activeGroup, enqueueMutation, recomputeCurrentUser]
   );
 
   const days = useMemo(() => {
@@ -490,81 +710,117 @@ export function App() {
     );
   };
 
-  const handleSaveUserProfile = async (updated: Partial<User>) => {
-    if (!currentUser) return;
-    const res = await fetch(`/api/users/${currentUser.id}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ revision: currentUser.revision, ...updated }),
-    });
-    const data = await res.json();
-    if (!res.ok) { if (res.status === 409) await fetchAllData(currentUser.id); throw new Error(data.error || "Не удалось обновить профиль"); }
-    await fetchAllData(currentUser.id);
-  };
+  const handleSaveUserProfile = useCallback(
+    async (updated: Partial<User>) => {
+      const activeUser = currentUserRef.current;
+      if (!activeUser) return;
+      const targetUserId = activeUser.id;
 
-  const handleSaveDayOverride = async (
-    userId: number,
-    dateStr: string,
-    override: DayOverride | null,
-    expectedOverride?: DayOverride | null,
-    groupId?: string
-  ) => {
-    if (!currentUser || userId !== currentUser.id) {
-      toast.error("Редактировать можно только свой собственный график");
-      return;
-    }
+      const opId = nextMutationOpIdRef.current++;
+      pendingMutationsRef.current = [
+        ...pendingMutationsRef.current,
+        { opId, kind: "profile", changes: updated },
+      ];
+      recomputeCurrentUser();
 
-    const prevUser = currentUser;
-    setCurrentUser((prev) => {
-      if (!prev) return prev;
-      const newOverrides = { ...(prev.overrides || {}) };
-      if (override === null) {
-        delete newOverrides[dateStr];
-      } else {
-        newOverrides[dateStr] = override;
-      }
-      let newGroups = prev.timeline_groups ? [...prev.timeline_groups] : undefined;
-      if (newGroups && groupId) {
-        newGroups = newGroups.map((g) => {
-          if (g.id !== groupId) return g;
-          const gOverrides = { ...(g.overrides || {}) };
-          if (override === null) {
-            delete gOverrides[dateStr];
-          } else {
-            gOverrides[dateStr] = override;
-          }
-          return { ...g, overrides: gOverrides };
+      return enqueueMutation(async () => {
+        const baseServerUser = serverUserRef.current || activeUser;
+        let payloadChanges: Partial<User> = { ...updated };
+        if (payloadChanges.timeline_groups) {
+          const latestGroups = getUserTimelineGroups(baseServerUser);
+          payloadChanges = {
+            ...payloadChanges,
+            timeline_groups: payloadChanges.timeline_groups.map((g) => {
+              const latestG = latestGroups.find((lg) => lg.id === g.id);
+              return latestG?.overrides ? { ...g, overrides: latestG.overrides } : g;
+            }),
+          };
+        }
+
+        const res = await fetch(`/api/users/${targetUserId}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            revision: baseServerUser.revision,
+            ...payloadChanges,
+          }),
         });
-      }
-      return {
-        ...prev,
-        overrides: newOverrides,
-        timeline_groups: newGroups,
-      };
-    });
+        const data = await res.json();
+        pendingMutationsRef.current = pendingMutationsRef.current.filter(
+          (m) => m.opId !== opId
+        );
+        if (!res.ok) {
+          recomputeCurrentUser();
+          if (res.status === 409) await fetchAllData(targetUserId);
+          throw new Error(data.error || "Не удалось обновить профиль");
+        }
+        applyIncomingServerUser(data);
+      });
+    },
+    [applyIncomingServerUser, enqueueMutation, fetchAllData, recomputeCurrentUser]
+  );
 
-    const res = await fetch(`/api/users/${currentUser.id}/overrides/${dateStr}`, {
-      method: override === null ? "DELETE" : "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        expectedOverride:
-          expectedOverride === undefined
-            ? (groupId && groupId !== "work"
-                ? currentUser.timeline_groups?.find((g) => g.id === groupId)?.overrides?.[dateStr] ?? null
-                : currentUser.overrides?.[dateStr] ?? null)
-            : expectedOverride,
-        ...(override === null ? {} : { override }),
-        ...(groupId ? { groupId } : {}),
-      }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      setCurrentUser(prevUser);
-      if (res.status === 409) await fetchAllData(currentUser.id);
-      throw new Error(data.error || "Ошибка сохранения дня");
-    }
-    await fetchAllData(currentUser.id);
-  };
+  const handleSaveDayOverride = useCallback(
+    async (
+      userId: number,
+      dateStr: string,
+      override: DayOverride | null,
+      expectedOverride?: DayOverride | null,
+      groupId?: string
+    ) => {
+      const baseUser = currentUserRef.current;
+      if (!baseUser || userId !== baseUser.id) {
+        toast.error("Редактировать можно только свой собственный график");
+        return;
+      }
+
+      const targetGroupId = groupId || "work";
+      const resolvedExpectedOverride =
+        expectedOverride !== undefined
+          ? expectedOverride
+          : getExpectedOverrideForGroupDate(baseUser, targetGroupId, dateStr);
+
+      const opId = nextMutationOpIdRef.current++;
+      pendingMutationsRef.current = [
+        ...pendingMutationsRef.current,
+        {
+          opId,
+          kind: "override",
+          dateStr,
+          groupId: targetGroupId,
+          override,
+        },
+      ];
+      recomputeCurrentUser();
+
+      return enqueueMutation(async () => {
+        const res = await fetch(`/api/users/${userId}/overrides/${dateStr}`, {
+          method: override === null ? "DELETE" : "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            expectedOverride: resolvedExpectedOverride,
+            ...(override === null ? {} : { override }),
+            ...(groupId ? { groupId } : {}),
+          }),
+        });
+        const data = await res.json();
+        pendingMutationsRef.current = pendingMutationsRef.current.filter(
+          (m) => m.opId !== opId
+        );
+        if (!res.ok) {
+          recomputeCurrentUser();
+          if (res.status === 409) await fetchAllData(userId);
+          throw new Error(data.error || "Ошибка сохранения дня");
+        }
+        if (data?.user) {
+          applyIncomingServerUser(data.user);
+        } else {
+          await fetchAllData(userId);
+        }
+      });
+    },
+    [applyIncomingServerUser, enqueueMutation, fetchAllData, recomputeCurrentUser]
+  );
 
   const handleRespondInvite = async (groupId: number, action: "accept" | "decline") => {
     if (!currentUser) return;
@@ -686,6 +942,9 @@ export function App() {
     if (!response.ok && response.status !== 401) { toast.error("Не удалось завершить сессию"); return; }
     localStorage.removeItem(STORAGE_USER_ID_KEY);
     localStorage.removeItem(STORAGE_GROUP_ID_KEY);
+    serverUserRef.current = null;
+    pendingMutationsRef.current = [];
+    currentUserRef.current = null;
     setCurrentUser(null);
     setGroups([]);
     setActiveGroupId(null);

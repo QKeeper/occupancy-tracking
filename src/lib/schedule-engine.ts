@@ -413,7 +413,10 @@ export function getUserTimelineGroups(user: Partial<User>): TimelineGroup[] {
     return user.timeline_groups.map((g) => ({
       ...g,
       is_enabled: g.is_enabled ?? true,
-      overrides: g.overrides || (g.id === "work" ? user.overrides || {} : {}),
+      overrides:
+        g.id === "work"
+          ? { ...(g.overrides || {}), ...(user.overrides || {}) }
+          : g.overrides || {},
       style: g.style || (g.id === "work" ? user.timeline_style || DEFAULT_TIMELINE_STYLE : DEFAULT_TIMELINE_STYLE),
     }));
   }
@@ -1136,5 +1139,87 @@ export function addSlotToGroupOnDate(
     expectedOverride: existingOverride,
     status: "partial",
     note: existingNote,
+  };
+}
+
+export function getExpectedOverrideForGroupDate(
+  user: Partial<User>,
+  groupId: string | undefined,
+  dateStr: string
+): DayOverride | null {
+  const targetGroupId = groupId || "work";
+  const groups = getUserTimelineGroups(user);
+  const group = groups.find((g) => g.id === targetGroupId);
+  if (group) {
+    return group.overrides?.[dateStr] ?? null;
+  }
+  if (targetGroupId === "work") {
+    return user.overrides?.[dateStr] ?? null;
+  }
+  return null;
+}
+
+export function applyOptimisticOverrideToUser(
+  user: User,
+  dateStr: string,
+  groupId: string | undefined,
+  override: DayOverride | null
+): User {
+  const targetGroupId = groupId || "work";
+  const nextOverrides = { ...(user.overrides || {}) };
+
+  if (targetGroupId === "work") {
+    if (override === null) {
+      delete nextOverrides[dateStr];
+    } else {
+      nextOverrides[dateStr] = override;
+    }
+  }
+
+  const baseGroups = getUserTimelineGroups({
+    ...user,
+    overrides: nextOverrides,
+  });
+  let foundGroup = false;
+  const nextGroups: TimelineGroup[] = baseGroups.map((g) => {
+    if (g.id !== targetGroupId) return g;
+    foundGroup = true;
+    const gOverrides = { ...(g.overrides || {}) };
+    if (override === null) {
+      delete gOverrides[dateStr];
+    } else {
+      gOverrides[dateStr] = override;
+    }
+    return {
+      ...g,
+      overrides: gOverrides,
+    };
+  });
+
+  if (
+    !foundGroup &&
+    (targetGroupId === "events" || targetGroupId === "single") &&
+    override !== null
+  ) {
+    nextGroups.push({
+      id: targetGroupId,
+      name: "Без категории",
+      style: {
+        bgColor: "#6366f1",
+        patternColor: "#a5b4fc",
+        patternType: "none",
+        symbol: "📌",
+        iconScale: 1,
+      },
+      schedule_config: { mode: "manual" },
+      overrides: { [dateStr]: override },
+      is_enabled: true,
+    });
+  }
+
+  return {
+    ...user,
+    overrides: nextOverrides,
+    timeline_groups: nextGroups,
   };
 }

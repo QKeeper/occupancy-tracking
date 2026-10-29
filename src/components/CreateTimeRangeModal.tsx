@@ -117,13 +117,14 @@ export const CreateTimeRangeModal: React.FC<CreateTimeRangeModalProps> = ({
 
     setSaving(true);
     try {
-      await onSave(
+      const savePromise = onSave(
         dateStr,
         { start: startTime, end: endTime },
         selectedGroupId,
         note.trim() || undefined
       );
       onOpenChange(false);
+      await savePromise;
     } catch (e: any) {
       toast.error(e.message || "Не удалось сохранить интервал");
     } finally {

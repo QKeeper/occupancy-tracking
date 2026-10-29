@@ -512,6 +512,34 @@ test('sessions, password migration, permissions, validation and concurrent saves
       const eventsAfterResize = meAfterResize.timeline_groups.find(g => g.id === 'events');
       assert.equal(eventsAfterResize.overrides['2026-11-12'].slots[0].start, '14:30');
       assert.equal(eventsAfterResize.overrides['2026-11-12'].slots[0].end, '17:00');
+
+      // Saving a work override and a sleep override on the same day (2026-11-12) keeps all three groups independent
+      const workSameDay = await call('PUT', `/api/users/${a.data.id}/overrides/2026-11-12`, {
+        expectedOverride: null,
+        groupId: 'work',
+        override: { status: 'working', slots: [{ start: '09:00', end: '13:00' }] }
+      }, a.cookies);
+      assert.equal(workSameDay.status, 200);
+
+      const sleepSameDay = await call('PUT', `/api/users/${a.data.id}/overrides/2026-11-12`, {
+        expectedOverride: null,
+        groupId: 'sleep',
+        override: { status: 'working', slots: [{ start: '23:30', end: '07:30' }] }
+      }, a.cookies);
+      assert.equal(sleepSameDay.status, 200);
+
+      // Saving timeline_groups without overrides property preserves existing per-group overrides in DB
+      const meBeforeProfileSave = (await call('GET', '/api/auth/me', undefined, a.cookies)).data;
+      const strippedGroups = meBeforeProfileSave.timeline_groups.map(({ overrides, ...rest }) => rest);
+      const preserveOverridesRes = await call('PUT', `/api/users/${a.data.id}`, {
+        revision: meBeforeProfileSave.revision,
+        timeline_groups: strippedGroups
+      }, a.cookies);
+      assert.equal(preserveOverridesRes.status, 200);
+      const meAfterProfileSave = (await call('GET', '/api/auth/me', undefined, a.cookies)).data;
+      assert.equal(meAfterProfileSave.overrides['2026-11-12'].slots[0].start, '09:00');
+      assert.equal(meAfterProfileSave.timeline_groups.find(g => g.id === 'sleep').overrides['2026-11-12'].slots[0].start, '23:30');
+      assert.equal(meAfterProfileSave.timeline_groups.find(g => g.id === 'events').overrides['2026-11-12'].slots[0].start, '14:30');
     });
     await t.test('feedback tickets can be created with tags, liked, commented, and deleted by owner or admin',async()=>{
       const bUser = await call('POST','/api/auth/login',{username:'member_user',password:secret});

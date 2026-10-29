@@ -42,8 +42,21 @@ export function installUserRoutes(app: Express, pool: Pool, broadcast: (type: st
       const { revision, ...changes } = profileSchema.parse(req.body);
       if (changes.timeline_style) changes.timeline_style = await normalizeStyle(changes.timeline_style);
       if (changes.timeline_groups) {
+        const { rows: existingUserRows } = await pool.query(
+          "SELECT timeline_groups FROM users WHERE id=$1",
+          [res.locals.userId]
+        );
+        const existingGroups: any[] = Array.isArray(existingUserRows[0]?.timeline_groups)
+          ? existingUserRows[0].timeline_groups
+          : [];
         for (const g of changes.timeline_groups) {
           if (g.style) g.style = await normalizeStyle(g.style);
+          if (g.overrides === undefined) {
+            const prevGroup = existingGroups.find((eg: any) => eg?.id === g.id);
+            if (prevGroup?.overrides) {
+              g.overrides = prevGroup.overrides;
+            }
+          }
         }
         const workGroup = changes.timeline_groups.find((g) => g.id === "work");
         if (workGroup) {
@@ -65,7 +78,7 @@ export function installUserRoutes(app: Express, pool: Pool, broadcast: (type: st
       const { rows } = await pool.query(`UPDATE users SET ${sets.join(",")}, revision=revision+1 WHERE id=$${params.length-1} AND revision=$${params.length} RETURNING id`, params);
       if (!rows.length) return res.status(409).json({ error: "Данные уже изменились. Обновите их перед сохранением" });
       const profile = await pool.query(`SELECT ${USER_COLUMNS} FROM user_profiles WHERE id=$1`, [res.locals.userId]);
-      res.json(profile.rows[0]); broadcast("schedule_updated", { userId: res.locals.userId });
+      res.json(profile.rows[0]); broadcast("schedule_updated", { userId: res.locals.userId, revision: profile.rows[0]?.revision });
     } catch (e) { next(e); }
   });
   app.put("/api/users/:id/member-order", async (req, res, next) => {
@@ -183,7 +196,7 @@ export function installUserRoutes(app: Express, pool: Pool, broadcast: (type: st
 
         const profile = await client.query(`SELECT ${USER_COLUMNS} FROM user_profiles WHERE id=$1`, [res.locals.userId]);
         await client.query("COMMIT");
-        broadcast("schedule_updated", { userId: res.locals.userId, dateStr: date });
+        broadcast("schedule_updated", { userId: res.locals.userId, dateStr: date, groupId: targetGroupId, revision: profile.rows[0]?.revision });
         res.json({ ok: true, date, override: nextOverride, user: profile.rows[0] });
       } catch (e) { if (client) await client.query("ROLLBACK"); next(e); }
       finally { client?.release(); }
@@ -200,7 +213,7 @@ export function installUserRoutes(app: Express, pool: Pool, broadcast: (type: st
       const result = await client.query(`UPDATE users SET schedule_config=$1,revision=revision+1 WHERE id=$2 RETURNING id`, [JSON.stringify(config), res.locals.userId]);
       const profile = await client.query(`SELECT ${USER_COLUMNS} FROM user_profiles WHERE id=$1`, [result.rows[0].id]);
       await client.query("COMMIT");
-      res.json(profile.rows[0]); broadcast("schedule_updated", { userId: res.locals.userId });
+      res.json(profile.rows[0]); broadcast("schedule_updated", { userId: res.locals.userId, revision: profile.rows[0]?.revision });
     } catch (e) { await client.query("ROLLBACK"); next(e); }
     finally { client.release(); }
   });

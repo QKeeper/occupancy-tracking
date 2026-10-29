@@ -90,7 +90,16 @@ export const DayOverrideModal: React.FC<DayOverrideModalProps> = ({
       );
       setNote(computed.note || "");
     }
-  }, [open, selectedGroupId, date?.getTime(), user?.id, user?.revision]);
+  }, [open, selectedGroupId, date?.getTime(), user?.id]);
+
+  // Keep expectedOverride synced if background update for this group/date arrives
+  useEffect(() => {
+    if (!open || !user || !date) return;
+    const currentGroup = groups.find((g) => g.id === selectedGroupId) || groups[0];
+    if (!currentGroup) return;
+    const dStr = format(date, "yyyy-MM-dd");
+    setExpectedOverride(currentGroup.overrides?.[dStr] ?? null);
+  }, [open, selectedGroupId, date?.getTime(), user]);
 
   if (!user || !date) return null;
 
@@ -104,7 +113,7 @@ export const DayOverrideModal: React.FC<DayOverrideModalProps> = ({
     setSaving(true);
     try {
       const finalSlots = status === "free" ? [] : slots;
-      await onSaveOverride(
+      const savePromise = onSaveOverride(
         user.id,
         dateStr,
         {
@@ -116,8 +125,8 @@ export const DayOverrideModal: React.FC<DayOverrideModalProps> = ({
         expectedOverride,
         selectedGroupId
       );
-      toast.success("Сохранено");
       onOpenChange(false);
+      await savePromise;
     } catch (e: any) {
       toast.error(e.message || "Не удалось сохранить");
     } finally {
@@ -128,9 +137,9 @@ export const DayOverrideModal: React.FC<DayOverrideModalProps> = ({
   const handleResetToDefault = async () => {
     setSaving(true);
     try {
-      await onSaveOverride(user.id, dateStr, null, expectedOverride, selectedGroupId);
-      toast.info("Сброшено к базовому расписанию группы");
+      const resetPromise = onSaveOverride(user.id, dateStr, null, expectedOverride, selectedGroupId);
       onOpenChange(false);
+      await resetPromise;
     } catch (e: any) {
       toast.error(e.message || "Ошибка сброса");
     } finally {

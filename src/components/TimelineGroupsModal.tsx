@@ -130,7 +130,7 @@ export const TimelineGroupsModal: React.FC<TimelineGroupsModalProps> = ({
       setShowNewGroupMenu(false);
       setNewGroupName("");
     }
-  }, [open, user.id, user.revision]);
+  }, [open, user.id]);
 
   const activeGroup = groups.find((g) => g.id === selectedGroupId) || groups[0];
 
