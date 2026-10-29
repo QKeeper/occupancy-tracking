@@ -458,6 +458,33 @@ test('sessions, password migration, permissions, validation and concurrent saves
       const sleepGroup=updatedMe.timeline_groups.find(g=>g.id==='sleep');
       assert.ok(sleepGroup.overrides['2026-11-10']);
       assert.equal(sleepGroup.overrides['2026-11-10'].slots[0].start,'22:00');
+
+      // Edit existing override on sleep group - should succeed with expectedOverride matching
+      const editSleep=await call('PUT',`/api/users/${a.data.id}/overrides/2026-11-10`,{
+        expectedOverride:{status:'working',slots:[{start:'22:00',end:'06:00'}]},
+        groupId:'sleep',
+        override:{status:'working',slots:[{start:'23:00',end:'07:00'}]}
+      },a.cookies);
+      assert.equal(editSleep.status,200);
+
+      // Conflict test: wrong expectedOverride fails with 409
+      const conflictSleep=await call('PUT',`/api/users/${a.data.id}/overrides/2026-11-10`,{
+        expectedOverride:null,
+        groupId:'sleep',
+        override:{status:'working',slots:[{start:'00:00',end:'08:00'}]}
+      },a.cookies);
+      assert.equal(conflictSleep.status,409);
+
+      // Reset / Delete existing override on sleep group with DELETE
+      const resetSleep=await call('DELETE',`/api/users/${a.data.id}/overrides/2026-11-10`,{
+        expectedOverride:{status:'working',slots:[{start:'23:00',end:'07:00'}]},
+        groupId:'sleep'
+      },a.cookies);
+      assert.equal(resetSleep.status,200);
+
+      const afterResetMe=(await call('GET','/api/auth/me',undefined,a.cookies)).data;
+      const sleepAfterReset=afterResetMe.timeline_groups.find(g=>g.id==='sleep');
+      assert.equal(sleepAfterReset.overrides['2026-11-10'],undefined);
     });
     await t.test('feedback tickets can be created with tags, liked, commented, and deleted by owner or admin',async()=>{
       const bUser = await call('POST','/api/auth/login',{username:'member_user',password:secret});

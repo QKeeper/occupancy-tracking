@@ -7,6 +7,29 @@ import { z } from "zod";
 import { dateSchema, overrideSchema, profileSchema, revisionSchema, scheduleFieldsSchema, scheduleSchema } from "./validation";
 
 export const USER_COLUMNS = "id, username, display_name, avatar_color, avatar_url, banner_url, timeline_style, member_orders, schedule_config, overrides, revision, created_at, time_zone, is_admin, is_super_admin, timeline_groups";
+export function areOverridesEqual(a: any, b: any): boolean {
+  if (a === b) return true;
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+  if (a.status !== b.status) return false;
+  const noteA = (a.note ?? "").trim();
+  const noteB = (b.note ?? "").trim();
+  if (noteA !== noteB) return false;
+  const defaultTz = "Asia/Yekaterinburg";
+  const tzA = (!a.timeZone || a.timeZone === defaultTz) ? "" : a.timeZone;
+  const tzB = (!b.timeZone || b.timeZone === defaultTz) ? "" : b.timeZone;
+  if (tzA !== tzB) return false;
+  const slotsA = Array.isArray(a.slots) ? a.slots : [];
+  const slotsB = Array.isArray(b.slots) ? b.slots : [];
+  if (slotsA.length !== slotsB.length) return false;
+  for (let i = 0; i < slotsA.length; i++) {
+    const sA = slotsA[i];
+    const sB = slotsB[i];
+    if (!sA || !sB || sA.start !== sB.start || sA.end !== sB.end) return false;
+  }
+  return true;
+}
+
 export function installUserRoutes(app: Express, pool: Pool, broadcast: (type: string, payload: any) => void,
   saveImage: (value: string | null | undefined, kind: "avatar" | "banner") => string | null,
   normalizeStyle: (style: TimelineStyleConfig) => Promise<TimelineStyleConfig>) {
@@ -104,9 +127,12 @@ export function installUserRoutes(app: Express, pool: Pool, broadcast: (type: st
 
         if (targetGroupId === "work") {
           const current = await client.query(`SELECT COALESCE((SELECT value FROM manual_override_documents
-            WHERE user_id=$1 AND override_date=$2::date),'null'::jsonb)=$3::jsonb AS matches`,
-            [res.locals.userId, date, JSON.stringify(body.expectedOverride)]);
-          if (!current.rows[0].matches) throw new HttpError(409, "Этот день уже изменён в другой вкладке. Обновите данные");
+            WHERE user_id=$1 AND override_date=$2::date),'null'::jsonb) AS doc_value`,
+            [res.locals.userId, date]);
+          const existingWorkOv = current.rows[0]?.doc_value ?? null;
+          if (body.expectedOverride !== undefined && !areOverridesEqual(existingWorkOv, body.expectedOverride)) {
+            throw new HttpError(409, "Этот день уже изменён в другой вкладке. Обновите данные");
+          }
           await replaceManualDay(client, res.locals.userId, date, nextOverride);
           if (Array.isArray(userRows[0]?.timeline_groups)) {
             const nextGroups = userRows[0].timeline_groups.map((g: any) => {
@@ -125,13 +151,15 @@ export function installUserRoutes(app: Express, pool: Pool, broadcast: (type: st
           const groupIdx = groups.findIndex((g: any) => g.id === targetGroupId);
           if (groupIdx >= 0) {
             const existingOv = groups[groupIdx].overrides?.[date] ?? null;
-            if (body.expectedOverride !== undefined && JSON.stringify(existingOv) !== JSON.stringify(body.expectedOverride)) {
+            if (body.expectedOverride !== undefined && !areOverridesEqual(existingOv, body.expectedOverride)) {
               throw new HttpError(409, "Этот день уже изменён в другой вкладке. Обновите данные");
             }
             const nextOvMap = { ...(groups[groupIdx].overrides || {}) };
             if (nextOverride) nextOvMap[date] = nextOverride; else delete nextOvMap[date];
             groups[groupIdx] = { ...groups[groupIdx], overrides: nextOvMap };
             await client.query("UPDATE users SET timeline_groups=$1, revision=revision+1 WHERE id=$2", [JSON.stringify(groups), res.locals.userId]);
+          } else {
+            throw new HttpError(404, "Группа таймлайна не найдена");
           }
         }
 

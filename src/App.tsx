@@ -1369,7 +1369,7 @@ export function App() {
       <DayOverrideModal
         open={overrideTarget.open}
         onOpenChange={(open) => setOverrideTarget((p) => ({ ...p, open }))}
-        user={overrideTarget.user}
+        user={currentUser}
         date={overrideTarget.date}
         initialGroupId={overrideTarget.groupId}
         onSaveOverride={handleSaveDayOverride}

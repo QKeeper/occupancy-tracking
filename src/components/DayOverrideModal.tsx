@@ -90,7 +90,7 @@ export const DayOverrideModal: React.FC<DayOverrideModalProps> = ({
       );
       setNote(computed.note || "");
     }
-  }, [open, selectedGroupId, date?.getTime(), user?.id]);
+  }, [open, selectedGroupId, date?.getTime(), user?.id, user?.revision]);
 
   if (!user || !date) return null;
 
