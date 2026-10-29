@@ -122,7 +122,7 @@ export function installAuth(app: Express, pool: Pool) {
     next();
   });
   app.use("/api", async (req: Request, res: Response, next: NextFunction) => {
-    if (["/auth/login", "/auth/register", "/auth/switch", "/openapi.json", "/llms.txt"].includes(req.path)) return next();
+    if (["/auth/login", "/auth/register", "/auth/switch", "/openapi.json", "/llms.txt", "/health"].includes(req.path)) return next();
     try {
       const token = cookies(req)[COOKIE];
       if (!token) return res.status(401).json({ error: "Войдите в аккаунт" });
