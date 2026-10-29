@@ -69,11 +69,11 @@ const DAYS_OF_WEEK = [
 ];
 
 const COLOR_PRESETS = [
-  { label: "Алый (Работа)", bg: "#e11d48", pattern: "#fda4af" },
-  { label: "Ночной индиго (Сон)", bg: "#1e293b", pattern: "#94a3b8" },
-  { label: "Изумруд (Спорт)", bg: "#059669", pattern: "#a7f3d0" },
-  { label: "Янтарь (Учёба)", bg: "#d97706", pattern: "#fde68a" },
-  { label: "Фиолетовый (Хобби)", bg: "#7c3aed", pattern: "#ddd6fe" },
+  { label: "Алый", bg: "#e11d48", pattern: "#fda4af" },
+  { label: "Ночной индиго", bg: "#1e293b", pattern: "#94a3b8" },
+  { label: "Изумруд", bg: "#059669", pattern: "#a7f3d0" },
+  { label: "Янтарь", bg: "#d97706", pattern: "#fde68a" },
+  { label: "Фиолетовый", bg: "#7c3aed", pattern: "#ddd6fe" },
   { label: "Лазурный", bg: "#0284c7", pattern: "#bae6fd" },
   { label: "Розовый", bg: "#db2777", pattern: "#fbcfe8" },
   { label: "Графит", bg: "#334155", pattern: "#cbd5e1" },
@@ -88,41 +88,6 @@ const EXTENDED_SYMBOLS = [
   "📚",
   "🎨",
   "🍿",
-];
-
-const GROUP_QUICK_TEMPLATES = [
-  {
-    name: "Сон",
-    symbol: "🌙",
-    bg: "#1e293b",
-    pattern: "#94a3b8",
-    slots: [{ start: "23:00", end: "07:00" }],
-    allDays: true,
-  },
-  {
-    name: "График работы",
-    symbol: "⚡",
-    bg: "#e11d48",
-    pattern: "#fda4af",
-    slots: [{ start: "09:00", end: "18:00" }],
-    allDays: false,
-  },
-  {
-    name: "Спорт / Тренировки",
-    symbol: "⚡",
-    bg: "#059669",
-    pattern: "#a7f3d0",
-    slots: [{ start: "19:00", end: "20:30" }],
-    allDays: false,
-  },
-  {
-    name: "Учёба / Курсы",
-    symbol: "⭐",
-    bg: "#d97706",
-    pattern: "#fde68a",
-    slots: [{ start: "18:30", end: "21:30" }],
-    allDays: false,
-  },
 ];
 
 function buildDefaultWeekly(
@@ -192,34 +157,6 @@ export const TimelineGroupsModal: React.FC<TimelineGroupsModalProps> = ({
       setSelectedGroupId(filtered[0].id);
     }
     toast.success("Группа удалена");
-  };
-
-  const handleCreateGroupFromTemplate = (template: (typeof GROUP_QUICK_TEMPLATES)[0]) => {
-    const id = `group_${Date.now()}`;
-    const newGroup: TimelineGroup = {
-      id,
-      name: template.name,
-      style: {
-        bgColor: template.bg,
-        patternColor: template.pattern,
-        patternType: template.symbol ? "symbols" : "stripes",
-        symbol: template.symbol || "⚡",
-        iconScale: 1,
-        iconHistory: [...TELEGRAM_PATTERN_SYMBOLS],
-      },
-      schedule_config: {
-        mode: "fixed_weekly",
-        timeZone: userTz,
-        weekly: buildDefaultWeekly(template.slots, template.allDays),
-      },
-      overrides: {},
-      is_enabled: true,
-    };
-
-    setGroups((prev) => [...prev, newGroup]);
-    setSelectedGroupId(id);
-    setShowNewGroupMenu(false);
-    toast.success(`Группа «${template.name}» создана`);
   };
 
   const handleCreateCustomGroup = () => {
@@ -486,7 +423,7 @@ export const TimelineGroupsModal: React.FC<TimelineGroupsModalProps> = ({
                 <div className="space-y-2 p-2 bg-card rounded-lg border border-border shadow-xs">
                   <div className="text-[11px] font-semibold text-foreground">Новая группа</div>
                   <Input
-                    placeholder="Название (напр. Спорт)"
+                    placeholder="Название группы..."
                     value={newGroupName}
                     onChange={(e) => setNewGroupName(e.target.value)}
                     className="h-7 text-xs"
@@ -513,21 +450,7 @@ export const TimelineGroupsModal: React.FC<TimelineGroupsModalProps> = ({
                     </Button>
                   </div>
 
-                  <div className="text-[10px] text-muted-foreground pt-1">Или выберите шаблон:</div>
-                  <div className="grid grid-cols-2 gap-1">
-                    {GROUP_QUICK_TEMPLATES.map((tmpl) => (
-                      <button
-                        key={tmpl.name}
-                        type="button"
-                        onClick={() => handleCreateGroupFromTemplate(tmpl)}
-                        className="text-left text-[11px] p-1.5 rounded border border-border/70 hover:bg-muted text-foreground flex items-center gap-1"
-                      >
-                        <span>{tmpl.symbol}</span>
-                        <span className="truncate">{tmpl.name.split(" ")[0]}</span>
-                      </button>
-                    ))}
                   </div>
-                </div>
               ) : (
                 <Button
                   variant="outline"
