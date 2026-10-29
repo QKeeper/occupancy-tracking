@@ -140,41 +140,32 @@ export const CreateTimeRangeModal: React.FC<CreateTimeRangeModalProps> = ({
 
         <div className="space-y-4 py-2">
           {/* Настройка времени */}
-          <div className="space-y-2 p-3 rounded-lg border border-border bg-muted/20">
-            <div className="flex items-center justify-between">
-              <Label className="text-xs font-medium">Время интервала</Label>
-              <div className="flex items-center gap-1.5">
-                {isOvernight && (
-                  <span className="text-[10px] text-muted-foreground/80 font-normal px-1.5 py-0.5 rounded bg-muted/60">
-                    +1 день
-                  </span>
-                )}
-                <span
-                  className={`text-xs font-mono font-medium px-2 py-0.5 rounded ${
-                    isTooShort
-                      ? "bg-destructive/15 text-destructive font-semibold"
-                      : "bg-primary/10 text-primary"
-                  }`}
-                >
-                  {durationLabel.trim()}
-                </span>
-              </div>
-            </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs font-medium">Время интервала</Label>
 
-            <div className="flex items-center justify-center gap-3 py-1">
-              <div className="w-32">
+            <div className="flex items-center gap-2.5">
+              <div className="w-28">
                 <TimeInput24 value={startTime} onChange={setStartTime} />
               </div>
               <span className="text-muted-foreground font-mono font-medium">–</span>
-              <div className="w-32">
+              <div className="w-28">
                 <TimeInput24 value={endTime} onChange={setEndTime} allow24={true} />
               </div>
+              {isOvernight && (
+                <span className="text-[10px] text-muted-foreground/80 font-normal px-1.5 py-0.5 rounded bg-muted/60">
+                  +1 день
+                </span>
+              )}
+            </div>
+
+            <div className="text-xs font-mono text-muted-foreground pt-0.5">
+              {durationLabel.trim()}
             </div>
 
             {isTooShort && (
-              <div className="flex items-center justify-center gap-1.5 text-xs text-destructive pt-1">
+              <div className="flex items-center gap-1.5 text-xs text-destructive pt-0.5">
                 <AlertCircle className="size-3.5 shrink-0" />
-                <span>Нельзя ужать меньше чем до полу часа (30 минут).</span>
+                <span>Минимальная длительность — 30 минут</span>
               </div>
             )}
           </div>

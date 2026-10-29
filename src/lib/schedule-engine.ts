@@ -935,6 +935,44 @@ export function computeContinuousFreeOverlap(
 
 
 
+export function mergeSlots(slots: TimeSlot[]): TimeSlot[] {
+  if (slots.length <= 1) return slots;
+
+  const toMinutesRange = (s: TimeSlot): [number, number] => {
+    const st = timeToMinutes(s.start);
+    let en = s.end === "24:00" ? 1440 : timeToMinutes(s.end);
+    if (en < st) en += 1440;
+    return [st, en];
+  };
+
+  const ranges = slots.map(toMinutesRange).sort((a, b) => a[0] - b[0]);
+  const mergedRanges: [number, number][] = [];
+
+  for (const r of ranges) {
+    if (mergedRanges.length === 0) {
+      mergedRanges.push([...r]);
+      continue;
+    }
+    const last = mergedRanges[mergedRanges.length - 1];
+    if (r[0] <= last[1]) {
+      last[1] = Math.max(last[1], r[1]);
+    } else {
+      mergedRanges.push([...r]);
+    }
+  }
+
+  return mergedRanges.map(([st, en]) => {
+    const isFullDayAligned = st === 0 && en >= 1440;
+    const maxDur = isFullDayAligned ? 1440 : 1425;
+    if (en - st > maxDur) {
+      en = st + maxDur;
+    }
+    const start = minutesToTime(st % 1440);
+    const end = en === 1440 ? "24:00" : en > 1440 ? minutesToTime((en - 1440) % 1440) : minutesToTime(en);
+    return { start, end };
+  });
+}
+
 export function resizeSlotInGroupOnDate(
   user: User,
   groupId: string,
@@ -966,11 +1004,12 @@ export function resizeSlotInGroupOnDate(
     note = sched.note;
   }
 
+  const normTime = (t: string) => (t === "24:00" ? "00:00" : t);
   let matchedIdx = existingSlots.findIndex(
-    (s) => s.start === oldSlot.start && s.end === oldSlot.end
+    (s) => normTime(s.start) === normTime(oldSlot.start) && normTime(s.end) === normTime(oldSlot.end)
   );
   if (matchedIdx === -1) {
-    matchedIdx = existingSlots.findIndex((s) => s.start === oldSlot.start);
+    matchedIdx = existingSlots.findIndex((s) => normTime(s.start) === normTime(oldSlot.start));
   }
   if (matchedIdx === -1) {
     matchedIdx = 0;
@@ -982,13 +1021,79 @@ export function resizeSlotInGroupOnDate(
     existingSlots.push({ start: newSlot.start, end: newSlot.end });
   }
 
-  existingSlots.sort((a, b) => timeToMinutes(a.start) - timeToMinutes(b.start));
+  const finalSlots = mergeSlots(existingSlots);
 
   return {
-    slots: existingSlots,
+    slots: finalSlots,
     expectedOverride: existingOverride,
     status: "partial",
     note,
+  };
+}
+
+export function removeSlotFromGroupOnDate(
+  user: User,
+  groupId: string,
+  targetDate: Date,
+  oldSlot: { start: string; end: string }
+): {
+  overridePayload: DayOverride | null;
+  expectedOverride: DayOverride | null;
+} {
+  const groups = getUserTimelineGroups(user);
+  const group = groups.find((g) => g.id === groupId);
+  const dateStr = format(targetDate, "yyyy-MM-dd");
+  const existingOverride = group?.overrides?.[dateStr] ?? null;
+
+  let existingSlots: TimeSlot[] = [];
+  let note = existingOverride?.note;
+
+  if (existingOverride) {
+    existingSlots = Array.isArray(existingOverride.slots)
+      ? existingOverride.slots.map((s) => ({ ...s }))
+      : [];
+  } else if (group && group.id !== "events" && group.id !== "single") {
+    const userTz = normalizeTimeZone(user.time_zone || DEFAULT_SCHEDULE_TIMEZONE);
+    const sched = getRawGroupDaySchedule(group, targetDate, userTz);
+    existingSlots = Array.isArray(sched.slots) ? sched.slots.map((s) => ({ ...s })) : [];
+    note = sched.note;
+  }
+
+  const normTime = (t: string) => (t === "24:00" ? "00:00" : t);
+  let matchedIdx = existingSlots.findIndex(
+    (s) => normTime(s.start) === normTime(oldSlot.start) && normTime(s.end) === normTime(oldSlot.end)
+  );
+  if (matchedIdx === -1) {
+    matchedIdx = existingSlots.findIndex((s) => normTime(s.start) === normTime(oldSlot.start));
+  }
+  if (matchedIdx !== -1) {
+    existingSlots.splice(matchedIdx, 1);
+  }
+
+  if (existingSlots.length === 0) {
+    if (group?.id === "events" || group?.id === "single") {
+      return {
+        overridePayload: null,
+        expectedOverride: existingOverride,
+      };
+    }
+    return {
+      overridePayload: {
+        status: "free",
+        slots: [],
+        note,
+      },
+      expectedOverride: existingOverride,
+    };
+  }
+
+  return {
+    overridePayload: {
+      status: "partial",
+      slots: existingSlots,
+      note,
+    },
+    expectedOverride: existingOverride,
   };
 }
 
@@ -1024,9 +1129,7 @@ export function addSlotToGroupOnDate(
     if (!existingNote && sched.note) existingNote = sched.note;
   }
 
-  const combinedSlots = [...existingSlots, newSlot].sort(
-    (a, b) => timeToMinutes(a.start) - timeToMinutes(b.start)
-  );
+  const combinedSlots = mergeSlots([...existingSlots, newSlot]);
 
   return {
     slots: combinedSlots,

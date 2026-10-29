@@ -11,6 +11,7 @@ import { CreateTimeRangeModal } from "@/components/CreateTimeRangeModal";
 import { toast } from "sonner";
 import {
   addSlotToGroupOnDate,
+  removeSlotFromGroupOnDate,
   resizeSlotInGroupOnDate,
   getUserTimelineGroups,
   minutesToTime,
@@ -30,7 +31,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { format, isWeekend } from "date-fns";
+import { addDays, format, isWeekend } from "date-fns";
 import { ru } from "date-fns/locale/ru";
 import { Check, ZoomIn, ZoomOut } from "lucide-react";
 
@@ -167,12 +168,12 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
     day: Date;
   } | null>(null);
 
-  // Optimistic override for instant resize/create updates without server roundtrip lag
-  const [optimisticOverride, setOptimisticOverride] = useState<{
+  // Optimistic overrides for instant resize/create/move updates without server roundtrip lag
+  const [optimisticOverrides, setOptimisticOverrides] = useState<Array<{
     dateStr: string;
     groupId: string;
-    override: DayOverride;
-  } | null>(null);
+    override: DayOverride | null;
+  }>>([]);
 
   // Modal for configuring newly created range
   const [createModalState, setCreateModalState] = useState<{
@@ -248,26 +249,34 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
     const map: Record<number, ReturnType<typeof layoutBusyBlocks>> = {};
     for (const m of members) {
       let userToCompute = m.id === currentUser.id ? { ...m, ...currentUser } : m;
-      if (m.id === currentUser.id && optimisticOverride) {
-        const { dateStr, groupId, override } = optimisticOverride;
-        const groups = getUserTimelineGroups(userToCompute);
-        const updatedGroups = groups.map((g) => {
-          if (g.id !== groupId) return g;
-          return {
-            ...g,
-            overrides: {
-              ...(g.overrides || {}),
-              [dateStr]: override,
-            },
-          };
-        });
+      if (m.id === currentUser.id && optimisticOverrides.length > 0) {
+        let currentGroups = getUserTimelineGroups(userToCompute);
+        let currentUserOverrides = { ...(userToCompute.overrides || {}) };
+
+        for (const opt of optimisticOverrides) {
+          const { dateStr, groupId, override } = opt;
+          if (override === null) {
+            delete currentUserOverrides[dateStr];
+          } else {
+            currentUserOverrides[dateStr] = override;
+          }
+
+          currentGroups = currentGroups.map((g) => {
+            if (g.id !== groupId) return g;
+            const gOv = { ...(g.overrides || {}) };
+            if (override === null) {
+              delete gOv[dateStr];
+            } else {
+              gOv[dateStr] = override;
+            }
+            return { ...g, overrides: gOv };
+          });
+        }
+
         userToCompute = {
           ...userToCompute,
-          overrides: {
-            ...(userToCompute.overrides || {}),
-            [dateStr]: override,
-          },
-          timeline_groups: updatedGroups,
+          overrides: currentUserOverrides,
+          timeline_groups: currentGroups,
         };
       }
       map[m.id] = layoutBusyBlocks(
@@ -275,7 +284,7 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
       );
     }
     return map;
-  }, [members, currentUser, days, viewerTimeZone, optimisticOverride]);
+  }, [members, currentUser, days, viewerTimeZone, optimisticOverrides]);
 
   // Generate each member's pattern once, rather than once per busy block/render.
   const blockStylesByMember = useMemo(() => {
@@ -574,17 +583,39 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
         const totalTimelineMinutes = (totalTimelineWidth / hourWidth) * 60;
         if (rSess.edge === "start") {
           let nextStart = snap15(rSess.origStartMin + deltaMins);
-          nextStart = Math.min(
-            rSess.currentEndMin - 30,
-            Math.min(rSess.dayStartMin + 1410, Math.max(rSess.dayStartMin, Math.max(rSess.currentEndMin - 1440, nextStart)))
-          );
+          nextStart = Math.max(0, Math.min(totalTimelineMinutes - 30, nextStart));
+
+          let nextEnd = rSess.origEndMin;
+          const isFullDayAligned = (nextStart % 1440 === 0) && (nextEnd % 1440 === 0);
+          const maxDur = isFullDayAligned ? 1440 : 1425;
+          if (nextEnd - nextStart > maxDur) {
+            nextStart = nextEnd - maxDur;
+          }
+          if (nextEnd - nextStart < 30) {
+            nextEnd = Math.min(totalTimelineMinutes, nextStart + 30);
+            if (nextEnd - nextStart < 30) {
+              nextStart = nextEnd - 30;
+            }
+          }
           rSess.currentStartMin = nextStart;
+          rSess.currentEndMin = nextEnd;
         } else {
           let nextEnd = snap15(rSess.origEndMin + deltaMins);
-          nextEnd = Math.max(
-            rSess.currentStartMin + 30,
-            Math.min(rSess.currentStartMin + 1440, Math.min(totalTimelineMinutes, nextEnd))
-          );
+          nextEnd = Math.max(30, Math.min(totalTimelineMinutes, nextEnd));
+
+          let nextStart = rSess.origStartMin;
+          const isFullDayAligned = (nextStart % 1440 === 0) && (nextEnd % 1440 === 0);
+          const maxDur = isFullDayAligned ? 1440 : 1425;
+          if (nextEnd - nextStart > maxDur) {
+            nextEnd = nextStart + maxDur;
+          }
+          if (nextEnd - nextStart < 30) {
+            nextStart = Math.max(0, nextEnd - 30);
+            if (nextEnd - nextStart < 30) {
+              nextEnd = nextStart + 30;
+            }
+          }
+          rSess.currentStartMin = nextStart;
           rSess.currentEndMin = nextEnd;
         }
         setResizingState({ ...rSess });
@@ -685,37 +716,133 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
           rSess.currentStartMin !== rSess.origStartMin ||
           rSess.currentEndMin !== rSess.origEndMin
         ) {
-          const newStart = minutesToTime(rSess.currentStartMin - rSess.dayStartMin);
-          const endDelta = rSess.currentEndMin - rSess.dayStartMin;
+          const startDayIdx = Math.floor(rSess.currentStartMin / 1440);
+          const targetDay = days[startDayIdx] || addDays(days[0], startDayIdx);
+          const targetDateStr = format(targetDay, "yyyy-MM-dd");
+          const sourceDateStr = format(rSess.block.sourceDate, "yyyy-MM-dd");
+
+          const targetDayStartMin = startDayIdx * 1440;
+          let safeStartMin = rSess.currentStartMin;
+          let safeEndMin = rSess.currentEndMin;
+
+          const isFullDayAligned = (safeStartMin % 1440 === 0) && (safeEndMin % 1440 === 0);
+          const maxDur = isFullDayAligned ? 1440 : 1425;
+          if (safeEndMin - safeStartMin > maxDur) {
+            if (rSess.edge === "start") {
+              safeStartMin = safeEndMin - maxDur;
+            } else {
+              safeEndMin = safeStartMin + maxDur;
+            }
+          }
+          if (safeEndMin - safeStartMin < 30) {
+            safeEndMin = safeStartMin + 30;
+          }
+
+          const newStart = minutesToTime(safeStartMin - targetDayStartMin);
+          const endDelta = safeEndMin - targetDayStartMin;
           const newEnd = deltaToSlotEnd(endDelta);
+          const oldSlot = {
+            start: rSess.block.startTimeLabel,
+            end: rSess.block.endTimeLabel,
+          };
+
           if (onSaveDayOverride) {
-            const dateStr = format(rSess.block.sourceDate, "yyyy-MM-dd");
-            const { slots, expectedOverride, status, note } = resizeSlotInGroupOnDate(
-              currentUser,
-              rSess.block.groupId,
-              rSess.block.sourceDate,
-              { start: rSess.block.startTimeLabel, end: rSess.block.endTimeLabel },
-              { start: newStart, end: newEnd }
-            );
-            const overridePayload: DayOverride = { status, slots, note };
-            setOptimisticOverride({
-              dateStr,
-              groupId: rSess.block.groupId,
-              override: overridePayload,
-            });
-            onSaveDayOverride(
-              currentUser.id,
-              dateStr,
-              overridePayload,
-              expectedOverride,
-              rSess.block.groupId
-            )
-              .catch((err) => {
-                toast.error(err.message || "Ошибка обновления интервала");
-              })
-              .finally(() => {
-                setOptimisticOverride(null);
-              });
+            if (targetDateStr === sourceDateStr) {
+              const { slots, expectedOverride, status, note } = resizeSlotInGroupOnDate(
+                currentUser,
+                rSess.block.groupId,
+                rSess.block.sourceDate,
+                oldSlot,
+                { start: newStart, end: newEnd }
+              );
+              const overridePayload: DayOverride = { status, slots, note };
+              setOptimisticOverrides([
+                {
+                  dateStr: targetDateStr,
+                  groupId: rSess.block.groupId,
+                  override: overridePayload,
+                },
+              ]);
+              onSaveDayOverride(
+                currentUser.id,
+                targetDateStr,
+                overridePayload,
+                expectedOverride,
+                rSess.block.groupId
+              )
+                .catch((err) => {
+                  toast.error(err.message || "Ошибка обновления интервала");
+                })
+                .finally(() => {
+                  setOptimisticOverrides([]);
+                });
+            } else {
+              // Moved across day boundaries!
+              const {
+                overridePayload: sourceOverridePayload,
+                expectedOverride: sourceExpectedOverride,
+              } = removeSlotFromGroupOnDate(
+                currentUser,
+                rSess.block.groupId,
+                rSess.block.sourceDate,
+                oldSlot
+              );
+
+              const {
+                slots: targetSlots,
+                expectedOverride: targetExpectedOverride,
+                status: targetStatus,
+                note: targetNote,
+              } = addSlotToGroupOnDate(
+                currentUser,
+                rSess.block.groupId,
+                targetDay,
+                { start: newStart, end: newEnd },
+                rSess.block.note
+              );
+              const targetOverridePayload: DayOverride = {
+                status: targetStatus,
+                slots: targetSlots,
+                note: targetNote,
+              };
+
+              setOptimisticOverrides([
+                {
+                  dateStr: sourceDateStr,
+                  groupId: rSess.block.groupId,
+                  override: sourceOverridePayload,
+                },
+                {
+                  dateStr: targetDateStr,
+                  groupId: rSess.block.groupId,
+                  override: targetOverridePayload,
+                },
+              ]);
+
+              (async () => {
+                try {
+                  // Save target date first to prevent data loss if target fails validation
+                  await onSaveDayOverride(
+                    currentUser.id,
+                    targetDateStr,
+                    targetOverridePayload,
+                    targetExpectedOverride,
+                    rSess.block.groupId
+                  );
+                  await onSaveDayOverride(
+                    currentUser.id,
+                    sourceDateStr,
+                    sourceOverridePayload,
+                    sourceExpectedOverride,
+                    rSess.block.groupId
+                  );
+                } catch (err: any) {
+                  toast.error(err.message || "Ошибка перемещения интервала");
+                } finally {
+                  setOptimisticOverrides([]);
+                }
+              })();
+            }
           }
         }
         return;
@@ -746,7 +873,19 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
             initialEnd: endStr,
           });
         } else if (!cSess.hasMoved && !suppressCellClickRef.current) {
-          onCellClick(currentUser, cSess.day);
+          const dayIdx = Math.floor(cSess.anchorMin / 1440);
+          const targetDay = days[dayIdx] || cSess.day;
+          const dayStartMin = dayIdx * 1440;
+          const startMinInDay = Math.max(0, cSess.anchorMin - dayStartMin);
+          const startStr = minutesToTime(startMinInDay);
+          const endDelta = Math.min(1440, startMinInDay + 60);
+          const endStr = deltaToSlotEnd(endDelta === startMinInDay ? startMinInDay + 30 : endDelta);
+          setCreateModalState({
+            open: true,
+            date: targetDay,
+            initialStart: startStr,
+            initialEnd: endStr,
+          });
         }
         return;
       }
@@ -1518,11 +1657,11 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
                 note
               );
               const overridePayload: DayOverride = { status, slots, note: finalNote };
-              setOptimisticOverride({
+              setOptimisticOverrides([{
                 dateStr,
                 groupId,
                 override: overridePayload,
-              });
+              }]);
               try {
                 await onSaveDayOverride(
                   currentUser.id,
@@ -1532,7 +1671,7 @@ export const OccupancyCalendarGrid: React.FC<OccupancyCalendarGridProps> = ({
                   groupId
                 );
               } finally {
-                setOptimisticOverride(null);
+                setOptimisticOverrides([]);
               }
             }}
           />

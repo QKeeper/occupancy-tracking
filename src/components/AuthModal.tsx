@@ -159,7 +159,7 @@ export const ProfileCabinetModal: React.FC<ProfileCabinetModalProps> = ({
   onOpenAddAccount,
   onLogout,
 }) => {
-  const [section, setSection] = useState<"profile" | "timeline" | "password" | "accounts">(
+  const [section, setSection] = useState<"profile" | "password" | "accounts">(
     "profile"
   );
 
@@ -171,19 +171,7 @@ export const ProfileCabinetModal: React.FC<ProfileCabinetModalProps> = ({
   const [timeZone, setTimeZone] = useState<string>(
     normalizeTimeZone(currentUser.time_zone || DEFAULT_SCHEDULE_TIMEZONE)
   );
-  const [timelineGroups, setTimelineGroups] = useState<TimelineGroup[]>(() =>
-    getUserTimelineGroups(currentUser)
-  );
-  const [selectedSkinGroupId, setSelectedSkinGroupId] = useState<string>("work");
-  const [timelineStyle, setTimelineStyle] = useState<TimelineStyleConfig>({
-    ...DEFAULT_TIMELINE_STYLE,
-    ...(currentUser.timeline_style || {}),
-    iconScale: currentUser.timeline_style?.iconScale ?? 1,
-    iconHistory: buildInitialIconHistory(
-      currentUser.timeline_style?.iconHistory,
-      currentUser.timeline_style?.symbol
-    ),
-  });
+
 
   // Password change fields inside the "password" tab
   const [currentPassword, setCurrentPassword] = useState("");
@@ -202,7 +190,6 @@ export const ProfileCabinetModal: React.FC<ProfileCabinetModalProps> = ({
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const [editRevision, setEditRevision] = useState(currentUser.revision);
   const bannerInputRef = useRef<HTMLInputElement>(null);
-  const customIconInputRef = useRef<HTMLInputElement>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -214,15 +201,6 @@ export const ProfileCabinetModal: React.FC<ProfileCabinetModalProps> = ({
       setAvatarUrl(currentUser.avatar_url || null);
       setBannerUrl(currentUser.banner_url || null);
       setTimeZone(normalizeTimeZone(currentUser.time_zone || DEFAULT_SCHEDULE_TIMEZONE));
-      setTimelineStyle({
-        ...DEFAULT_TIMELINE_STYLE,
-        ...(currentUser.timeline_style || {}),
-        iconScale: currentUser.timeline_style?.iconScale ?? 1,
-        iconHistory: buildInitialIconHistory(
-          currentUser.timeline_style?.iconHistory,
-          currentUser.timeline_style?.symbol
-        ),
-      });
       setCurrentPassword("");
       setNewPassword("");
       setConfirmNewPassword("");
@@ -282,48 +260,6 @@ export const ProfileCabinetModal: React.FC<ProfileCabinetModalProps> = ({
     }
   };
 
-  // При клике на иконку в истории — только выбираем её (в начало истории она перенесётся при сохранении)
-  const handleSelectIconFromHistory = (iconValue: string) => {
-    setTimelineStyle((prev) => ({
-      ...prev,
-      patternType: "symbols",
-      symbol: iconValue,
-    }));
-  };
-
-  // При загрузке новой иконки — она сразу выбирается и сразу переносится в начало истории (макс. 15)
-  const handleCustomPatternIconUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    if (!file) return;
-    try {
-      const dataUrl = await readFileAsDataUrl(file, 2);
-      const response = await fetch("/api/upload", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ dataUrl, kind: "icon" }),
-      });
-      const uploaded = await response.json();
-      if (!response.ok) throw new Error(uploaded.error || "Ошибка загрузки иконки");
-      const iconUrl: string = uploaded.url;
-      setTimelineStyle((prev) => {
-        const currentList = prev.iconHistory || TELEGRAM_PATTERN_SYMBOLS;
-        const nextHistory = [
-          iconUrl,
-          ...currentList.filter((item) => item !== iconUrl),
-        ].slice(0, MAX_ICON_HISTORY);
-        return {
-          ...prev,
-          patternType: "symbols",
-          symbol: iconUrl,
-          iconHistory: nextHistory,
-        };
-      });
-      toast.success("Иконка загружена и добавлена в начало истории");
-    } catch (err: any) {
-      toast.error(err.message);
-    }
-  };
-
   const handleSaveProfileOrTimeline = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrors({});
@@ -341,25 +277,6 @@ export const ProfileCabinetModal: React.FC<ProfileCabinetModalProps> = ({
       return;
     }
 
-    // При сохранении переносим выбранную иконку в начало истории и ограничиваем 15 элементами
-    const currentList = timelineStyle.iconHistory || TELEGRAM_PATTERN_SYMBOLS;
-    const updatedHistory = timelineStyle.symbol
-      ? [
-          timelineStyle.symbol,
-          ...currentList.filter((item) => item !== timelineStyle.symbol),
-        ].slice(0, MAX_ICON_HISTORY)
-      : currentList.slice(0, MAX_ICON_HISTORY);
-
-    const finalTimelineStyle: TimelineStyleConfig = {
-      ...timelineStyle,
-      iconHistory: updatedHistory,
-    };
-
-    const updatedGroups = timelineGroups.map((g) =>
-      g.id === selectedSkinGroupId ? { ...g, style: finalTimelineStyle } : g
-    );
-    const workGroup = updatedGroups.find((g) => g.id === "work");
-
     setLoading(true);
     try {
       await onUpdateProfile({
@@ -368,8 +285,8 @@ export const ProfileCabinetModal: React.FC<ProfileCabinetModalProps> = ({
         time_zone: normalizeTimeZone(timeZone),
         avatar_url: avatarUrl,
         banner_url: bannerUrl,
-        timeline_style: workGroup ? workGroup.style : finalTimelineStyle,
-        timeline_groups: updatedGroups,
+        timeline_style: currentUser.timeline_style,
+        timeline_groups: currentUser.timeline_groups,
       });
       toast.success("Настройки профиля сохранены");
       onOpenChange(false);
@@ -420,11 +337,6 @@ export const ProfileCabinetModal: React.FC<ProfileCabinetModalProps> = ({
     }
   };
 
-  const iconList = (timelineStyle.iconHistory || TELEGRAM_PATTERN_SYMBOLS).slice(
-    0,
-    MAX_ICON_HISTORY
-  );
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       {/* Модалка на полную высоту экрана (с небольшим отступом top-4 bottom-4) */}
@@ -448,19 +360,6 @@ export const ProfileCabinetModal: React.FC<ProfileCabinetModalProps> = ({
               >
                 <UserIcon className="size-3.5 shrink-0" />
                 <span>Профиль</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setSection("timeline")}
-                className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-md text-xs font-medium cursor-pointer ${
-                  section === "timeline"
-                    ? "bg-accent text-foreground"
-                    : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"
-                }`}
-              >
-                <Palette className="size-3.5 shrink-0" />
-                <span>Таймлайн</span>
               </button>
 
               <button
@@ -539,13 +438,6 @@ export const ProfileCabinetModal: React.FC<ProfileCabinetModalProps> = ({
               type="file"
               accept="image/png,image/gif,image/webp,image/jpeg"
               onChange={handleBannerUpload}
-              className="hidden"
-            />
-            <input
-              ref={customIconInputRef}
-              type="file"
-              accept=".svg,.png,.webp,image/svg+xml,image/png,image/webp"
-              onChange={handleCustomPatternIconUpload}
               className="hidden"
             />
 
@@ -768,7 +660,6 @@ export const ProfileCabinetModal: React.FC<ProfileCabinetModalProps> = ({
                 onSubmit={handleSaveProfileOrTimeline}
                 className="flex-1 flex flex-col justify-between"
               >
-                {section === "profile" ? (
                   /* СЕКЦИЯ 1: ПРОФИЛЬ (Прямое редактирование на карточке Discord) */
                   <div className="space-y-4">
                     <div>
@@ -972,259 +863,7 @@ export const ProfileCabinetModal: React.FC<ProfileCabinetModalProps> = ({
                       </div>
                     </div>
                   </div>
-                ) : (
-                  /* СЕКЦИЯ 2: КАСТОМИЗАЦИЯ СВОИХ ДИАПАЗОНОВ НА ТАЙМЛАЙНЕ */
-                  <div className="space-y-3.5">
-                    <div>
-                      <DialogTitle className="text-base font-semibold">
-                        Кастомизация таймлайна
-                      </DialogTitle>
-                      <DialogDescription className="text-xs">
-                        Настройте цвета и паттерн для любой из ваших групп таймлайнов
-                      </DialogDescription>
-                    </div>
 
-                    {/* Выбор группы таймлайнов для кастомизации скина */}
-                    {timelineGroups.length > 1 && (
-                      <div className="space-y-1.5 pb-1">
-                        <Label className="text-xs text-muted-foreground">Группа таймлайнов:</Label>
-                        <div className="flex flex-wrap gap-1.5">
-                          {timelineGroups.map((g) => {
-                            const isSelected = g.id === selectedSkinGroupId;
-                            return (
-                              <button
-                                key={g.id}
-                                type="button"
-                                onClick={() => {
-                                  // Preserve changes of the currently edited group before switching
-                                  setTimelineGroups((prev) =>
-                                    prev.map((item) =>
-                                      item.id === selectedSkinGroupId
-                                        ? { ...item, style: timelineStyle }
-                                        : item
-                                    )
-                                  );
-                                  setSelectedSkinGroupId(g.id);
-                                  setTimelineStyle({
-                                    ...DEFAULT_TIMELINE_STYLE,
-                                    ...(g.style || {}),
-                                    iconScale: g.style?.iconScale ?? 1,
-                                    iconHistory: buildInitialIconHistory(
-                                      g.style?.iconHistory,
-                                      g.style?.symbol
-                                    ),
-                                  });
-                                }}
-                                className={`px-2.5 py-1 rounded-lg text-xs font-medium flex items-center gap-1.5 border transition-all cursor-pointer ${
-                                  isSelected
-                                    ? "border-primary bg-primary/10 text-foreground ring-1 ring-primary/40 shadow-xs"
-                                    : "border-border bg-card/60 text-muted-foreground hover:text-foreground"
-                                }`}
-                              >
-                                <span
-                                  className="size-2 rounded-full shrink-0"
-                                  style={{ backgroundColor: isSelected ? timelineStyle.bgColor : g.style.bgColor }}
-                                />
-                                <span>{g.name}</span>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Живое превью диапазона на таймлайне */}
-                    <div className="space-y-1">
-                      <Label className="text-xs text-muted-foreground">
-                        Предпросмотр на таймлайне ({timelineGroups.find((g) => g.id === selectedSkinGroupId)?.name || "Группа"})
-                      </Label>
-                      <div className="relative h-12 rounded-lg border border-border bg-background/60 overflow-hidden flex items-center px-4">
-                        <div
-                          style={getTimelineBlockStyle(timelineStyle)}
-                          className="h-full w-full border-x flex items-center gap-1.5 px-3 text-white shadow-xs"
-                        >
-                          <span className="text-[11px] font-mono font-medium drop-shadow-xs shrink-0">
-                            {selectedSkinGroupId === "sleep" ? "23:00" : "09:00"}
-                          </span>
-                          <span className="text-[11px] font-medium truncate drop-shadow-xs">
-                            {timelineGroups.find((g) => g.id === selectedSkinGroupId)?.name || "Смена / Работа"}
-                          </span>
-                          <span className="ml-auto text-[11px] font-mono font-medium drop-shadow-xs shrink-0">
-                            {selectedSkinGroupId === "sleep" ? "07:00" : "18:00"}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* 2 пикера цвета (Фон и Паттерн) */}
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="space-y-1">
-                        <Label className="text-xs">Цвет фона</Label>
-                        <div className="flex items-center gap-2 rounded-lg border border-border bg-background/50 p-1.5">
-                          <input
-                            type="color"
-                            value={timelineStyle.bgColor}
-                            onChange={(e) =>
-                              setTimelineStyle((s) => ({ ...s, bgColor: e.target.value }))
-                            }
-                            className="size-6 rounded cursor-pointer border-0 bg-transparent"
-                          />
-                          <span className="text-xs font-mono uppercase">
-                            {timelineStyle.bgColor}
-                          </span>
-                        </div>
-                      </div>
-
-                      <div className="space-y-1">
-                        <Label className="text-xs">Цвет паттерна</Label>
-                        <div className="flex items-center gap-2 rounded-lg border border-border bg-background/50 p-1.5">
-                          <input
-                            type="color"
-                            value={timelineStyle.patternColor}
-                            onChange={(e) =>
-                              setTimelineStyle((s) => ({ ...s, patternColor: e.target.value }))
-                            }
-                            className="size-6 rounded cursor-pointer border-0 bg-transparent"
-                          />
-                          <span className="text-xs font-mono uppercase">
-                            {timelineStyle.patternColor}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Готовые гармоничные пары цветов */}
-                    <div className="flex flex-wrap gap-1.5">
-                      {TIMELINE_BG_PRESETS.map((preset) => (
-                        <button
-                          key={preset.label}
-                          type="button"
-                          onClick={() =>
-                            setTimelineStyle((s) => ({
-                              ...s,
-                              bgColor: preset.bg,
-                              patternColor: preset.pattern,
-                            }))
-                          }
-                          className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md border border-border bg-muted/30 hover:bg-muted text-[11px] cursor-pointer"
-                        >
-                          <span
-                            className="size-3 rounded-full border border-white/30"
-                            style={{ backgroundColor: preset.bg }}
-                          />
-                          <span>{preset.label}</span>
-                        </button>
-                      ))}
-                    </div>
-
-                    {/* Выбор типа паттерна: Полосочка | Смайлики как в Telegram | Сплошной */}
-                    <div className="space-y-1">
-                      <Label className="text-xs">Тип узора</Label>
-                      <div className="grid grid-cols-3 gap-2">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setTimelineStyle((s) => ({ ...s, patternType: "stripes" }))
-                          }
-                          className={`p-2 rounded-lg border text-xs font-medium cursor-pointer ${
-                            timelineStyle.patternType === "stripes"
-                              ? "border-primary bg-primary/10 text-foreground"
-                              : "border-border bg-background/40 text-muted-foreground hover:text-foreground"
-                          }`}
-                        >
-                          Полосочка
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setTimelineStyle((s) => ({ ...s, patternType: "symbols" }))
-                          }
-                          className={`p-2 rounded-lg border text-xs font-medium cursor-pointer flex items-center justify-center gap-1 ${
-                            timelineStyle.patternType === "symbols"
-                              ? "border-primary bg-primary/10 text-foreground"
-                              : "border-border bg-background/40 text-muted-foreground hover:text-foreground"
-                          }`}
-                        >
-                          <Sparkles className="size-3" />
-                          <span>Иконки</span>
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => setTimelineStyle((s) => ({ ...s, patternType: "none" }))}
-                          className={`p-2 rounded-lg border text-xs font-medium cursor-pointer ${
-                            timelineStyle.patternType === "none"
-                              ? "border-primary bg-primary/10 text-foreground"
-                              : "border-border bg-background/40 text-muted-foreground hover:text-foreground"
-                          }`}
-                        >
-                          Сплошной
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Сетка иконок (Слот #1 — загрузка SVG/PNG, остальные — история + пресеты, окрашенные в patternColor) + Масштаб */}
-                    {timelineStyle.patternType === "symbols" && (
-                      <div className="space-y-2.5 rounded-lg border border-border bg-muted/20 p-2.5">
-                        <div className="flex items-center justify-between gap-3">
-                          <span className="text-[11px] font-medium text-muted-foreground">
-                            Масштаб иконок ({Math.round((timelineStyle.iconScale ?? 1) * 100)}%)
-                          </span>
-                          <input
-                            type="range"
-                            min={0.5}
-                            max={2.0}
-                            step={0.1}
-                            value={timelineStyle.iconScale ?? 1}
-                            onChange={(e) =>
-                              setTimelineStyle((s) => ({
-                                ...s,
-                                iconScale: Number(e.target.value),
-                              }))
-                            }
-                            className="w-36 h-1 bg-muted rounded-lg appearance-none cursor-pointer accent-primary"
-                          />
-                        </div>
-
-                        <div className="grid grid-cols-8 gap-1">
-                          {/* СЛОТ 1: Загрузка своей иконки (SVG или прозрачный PNG) */}
-                          <button
-                            type="button"
-                            onClick={() => customIconInputRef.current?.click()}
-                            title="Загрузить свою иконку (SVG или PNG с прозрачным фоном)"
-                            className="h-8 rounded-md border border-dashed border-border bg-background/40 hover:bg-accent flex items-center justify-center text-muted-foreground hover:text-foreground cursor-pointer"
-                          >
-                            <Plus className="size-4" />
-                          </button>
-
-                          {/* Остальные слоты: история иконок и пресеты, сразу окрашенные в выбранный цвет паттерна */}
-                          {iconList.map((sym, idx) => {
-                            const isSelected = timelineStyle.symbol === sym;
-                            return (
-                              <button
-                                key={`${idx}-${sym.slice(0, 24)}`}
-                                type="button"
-                                onClick={() => handleSelectIconFromHistory(sym)}
-                                className={`h-8 rounded-md flex items-center justify-center cursor-pointer border ${
-                                  isSelected
-                                    ? "border-primary bg-primary/15 ring-1 ring-primary/40"
-                                    : "border-transparent bg-background/60 hover:bg-accent"
-                                }`}
-                              >
-                                <TintedPatternIcon
-                                  symbol={sym}
-                                  color={timelineStyle.patternColor}
-                                  size={18}
-                                />
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
 
                 {/* Нижняя панель сохранения без дивайдера */}
                 <div className="flex items-center justify-end gap-2 pt-4 mt-4">
