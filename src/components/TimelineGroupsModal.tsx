@@ -669,13 +669,13 @@ export const TimelineGroupsModal: React.FC<TimelineGroupsModalProps> = ({
                       return (
                         <div
                           key={key}
-                          className={`p-3 rounded-lg border transition-colors ${
+                          className={`p-3 rounded-lg border min-h-[68px] flex flex-col justify-center transition-colors ${
                             dayConfig.isWorking
                               ? "border-border bg-card/80"
                               : "border-border/40 bg-muted/15 opacity-70"
                           }`}
                         >
-                          <div className="flex items-center justify-between gap-3">
+                          <div className="flex items-center justify-between gap-3 min-h-[42px]">
                             <div className="flex items-center gap-3">
                               <Switch
                                 checked={dayConfig.isWorking}
@@ -1109,7 +1109,7 @@ export const TimelineGroupsModal: React.FC<TimelineGroupsModalProps> = ({
           </div>
         </div>
 
-        <DialogFooter className="px-6 py-3 border-t border-border/80 flex items-center justify-between">
+        <DialogFooter className="m-0 mx-0 mb-0 mt-0 w-full rounded-b-xl px-6 py-3 border-t border-border/80 flex items-center justify-between shrink-0 bg-background">
           <div className="text-xs text-muted-foreground">
             Всего групп: <span className="font-semibold text-foreground">{groups.length}</span> (активных:{" "}
             {groups.filter((g) => g.is_enabled !== false).length})

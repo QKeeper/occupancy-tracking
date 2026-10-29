@@ -52,7 +52,7 @@ export const TimeInput24: React.FC<TimeInput24Props> = ({ value, onChange, class
         >
           <SelectValue>{hh}</SelectValue>
         </SelectTrigger>
-        <SelectContent className="min-w-[4.5rem] max-h-48">
+        <SelectContent className="min-w-[4.5rem] max-h-[224px]">
           {HOURS.map((h) => (
             <SelectItem key={h} value={h} className="font-mono text-xs">
               {h}
@@ -76,7 +76,7 @@ export const TimeInput24: React.FC<TimeInput24Props> = ({ value, onChange, class
         >
           <SelectValue>{rawMm}</SelectValue>
         </SelectTrigger>
-        <SelectContent className="min-w-[4.5rem] max-h-48">
+        <SelectContent className="min-w-[4.5rem] max-h-[224px]">
           {minuteOptions.map((m) => (
             <SelectItem key={m} value={m} className="font-mono text-xs">
               {m}

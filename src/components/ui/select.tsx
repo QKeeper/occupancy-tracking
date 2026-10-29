@@ -75,9 +75,38 @@ const SelectScrollUpButton = React.forwardRef<
   <SelectPrimitive.ScrollUpButton
     ref={ref}
     className={cn(
-      "flex cursor-default items-center justify-center py-1 text-muted-foreground",
+      "flex h-6 cursor-pointer select-none items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors shrink-0",
       className
     )}
+    onPointerMove={(e) => {
+      // Предотвращаем скролл при наведении курсора
+      e.preventDefault();
+    }}
+    onPointerDown={(e) => {
+      // Скроллим только при нажатии (клик или удержание)
+      e.preventDefault();
+      const target = e.currentTarget;
+      const scrollStep = () => {
+        const content = target.closest('[data-slot="select-content"]');
+        const viewport = content?.querySelector<HTMLElement>(
+          "[data-radix-select-viewport]"
+        );
+        if (viewport) {
+          viewport.scrollBy({ top: -28, behavior: "smooth" });
+        }
+      };
+
+      scrollStep();
+
+      const timer = window.setInterval(scrollStep, 110);
+      const stop = () => {
+        window.clearInterval(timer);
+        window.removeEventListener("pointerup", stop);
+        window.removeEventListener("pointercancel", stop);
+      };
+      window.addEventListener("pointerup", stop);
+      window.addEventListener("pointercancel", stop);
+    }}
     {...props}
   >
     <ChevronUp className="size-3.5" />
@@ -92,9 +121,38 @@ const SelectScrollDownButton = React.forwardRef<
   <SelectPrimitive.ScrollDownButton
     ref={ref}
     className={cn(
-      "flex cursor-default items-center justify-center py-1 text-muted-foreground",
+      "flex h-6 cursor-pointer select-none items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors shrink-0",
       className
     )}
+    onPointerMove={(e) => {
+      // Предотвращаем скролл при наведении курсора
+      e.preventDefault();
+    }}
+    onPointerDown={(e) => {
+      // Скроллим только при нажатии (клик или удержание)
+      e.preventDefault();
+      const target = e.currentTarget;
+      const scrollStep = () => {
+        const content = target.closest('[data-slot="select-content"]');
+        const viewport = content?.querySelector<HTMLElement>(
+          "[data-radix-select-viewport]"
+        );
+        if (viewport) {
+          viewport.scrollBy({ top: 28, behavior: "smooth" });
+        }
+      };
+
+      scrollStep();
+
+      const timer = window.setInterval(scrollStep, 110);
+      const stop = () => {
+        window.clearInterval(timer);
+        window.removeEventListener("pointerup", stop);
+        window.removeEventListener("pointercancel", stop);
+      };
+      window.addEventListener("pointerup", stop);
+      window.addEventListener("pointercancel", stop);
+    }}
     {...props}
   >
     <ChevronDown className="size-3.5" />
@@ -129,7 +187,8 @@ const SelectContent = React.forwardRef<
         data-slot="select-content"
         className={cn(
           // Kontur UI popup container: небольшое скругление/rounded-xl, мягкая тень, 1px граница
-          "relative z-[70] max-h-72 min-w-[8rem] overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-lg shadow-black/10 transition-all duration-150",
+          // max-h-[224px] вмещает ровно 6 элементов (6 x 28px = 168px) + кнопки скролла (2 x 24px = 48px) + padding (8px)
+          "relative z-[70] max-h-[224px] min-w-[8rem] overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-lg shadow-black/10 transition-all duration-150",
           "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
           position === "popper" && [
             "data-[side=bottom]:translate-y-1 data-[side=top]:-translate-y-1",
