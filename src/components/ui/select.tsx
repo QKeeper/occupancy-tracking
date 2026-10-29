@@ -10,62 +10,33 @@ const SelectValue = SelectPrimitive.Value;
 export interface SelectTriggerProps
   extends React.ComponentPropsWithoutRef<typeof SelectPrimitive.Trigger> {
   size?: "default" | "sm" | "xs" | "lg";
-  variant?: "default" | "ghost";
   hideChevron?: boolean;
 }
 
 const SelectTrigger = React.forwardRef<
   React.ElementRef<typeof SelectPrimitive.Trigger>,
   SelectTriggerProps
->(
-  (
-    {
-      className,
-      children,
-      size = "default",
-      variant = "default",
-      hideChevron = false,
-      ...props
-    },
-    ref
-  ) => {
-    return (
-      <SelectPrimitive.Trigger
-        ref={ref}
-        data-slot="select-trigger"
-        className={cn(
-          "group/select-trigger inline-flex w-full items-center justify-between text-left font-normal select-none transition-all outline-none disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50",
-          // Variants
-          variant === "default" && [
-            "rounded-lg border border-input bg-background dark:bg-input/30 text-foreground",
-            "hover:border-foreground/30 hover:bg-muted/10",
-            "focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50",
-            "data-[state=open]:border-ring data-[state=open]:ring-3 data-[state=open]:ring-ring/50",
-            "aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20"
-          ],
-          variant === "ghost" && [
-            "border-0 bg-transparent text-foreground hover:bg-muted/40",
-            "focus-visible:ring-2 focus-visible:ring-ring/40 data-[state=open]:bg-muted/40"
-          ],
-          // Sizes
-          size === "default" && "h-8 px-2.5 py-1 text-xs md:text-sm gap-1.5",
-          size === "sm" && "h-7 px-2 py-0.5 text-xs gap-1",
-          size === "xs" && "h-6 px-1.5 py-0 text-xs gap-0.5",
-          size === "lg" && "h-9 px-3 py-1.5 text-sm gap-2",
-          className
-        )}
-        {...props}
-      >
-        <span className="truncate flex-1">{children}</span>
-        {!hideChevron && (
-          <SelectPrimitive.Icon asChild>
-            <ChevronDown className="size-3.5 shrink-0 text-muted-foreground transition-transform duration-200 group-data-[state=open]/select-trigger:rotate-180" />
-          </SelectPrimitive.Icon>
-        )}
-      </SelectPrimitive.Trigger>
-    );
-  }
-);
+>(({ className, children, size = "default", hideChevron = false, ...props }, ref) => (
+  <SelectPrimitive.Trigger
+    ref={ref}
+    data-slot="select-trigger"
+    className={cn(
+      "flex h-8 w-full items-center justify-between rounded-lg border border-input bg-transparent dark:bg-input/30 px-2.5 py-1 text-xs md:text-sm shadow-xs transition-colors outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 [&>span]:line-clamp-1 cursor-pointer",
+      size === "sm" && "h-7 text-xs px-2 py-0.5",
+      size === "xs" && "h-6 text-xs px-1.5 py-0",
+      size === "lg" && "h-9 text-sm px-3 py-1.5",
+      className
+    )}
+    {...props}
+  >
+    {children}
+    {!hideChevron && (
+      <SelectPrimitive.Icon asChild>
+        <ChevronDown className="size-3.5 opacity-50 shrink-0" />
+      </SelectPrimitive.Icon>
+    )}
+  </SelectPrimitive.Trigger>
+));
 SelectTrigger.displayName = SelectPrimitive.Trigger.displayName;
 
 const SelectScrollUpButton = React.forwardRef<
@@ -75,38 +46,9 @@ const SelectScrollUpButton = React.forwardRef<
   <SelectPrimitive.ScrollUpButton
     ref={ref}
     className={cn(
-      "flex h-6 cursor-pointer select-none items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors shrink-0",
+      "flex cursor-default items-center justify-center py-1 text-muted-foreground",
       className
     )}
-    onPointerMove={(e) => {
-      // Предотвращаем скролл при наведении курсора
-      e.preventDefault();
-    }}
-    onPointerDown={(e) => {
-      // Скроллим только при нажатии (клик или удержание)
-      e.preventDefault();
-      const target = e.currentTarget;
-      const scrollStep = () => {
-        const content = target.closest('[data-slot="select-content"]');
-        const viewport = content?.querySelector<HTMLElement>(
-          "[data-radix-select-viewport]"
-        );
-        if (viewport) {
-          viewport.scrollBy({ top: -28, behavior: "smooth" });
-        }
-      };
-
-      scrollStep();
-
-      const timer = window.setInterval(scrollStep, 110);
-      const stop = () => {
-        window.clearInterval(timer);
-        window.removeEventListener("pointerup", stop);
-        window.removeEventListener("pointercancel", stop);
-      };
-      window.addEventListener("pointerup", stop);
-      window.addEventListener("pointercancel", stop);
-    }}
     {...props}
   >
     <ChevronUp className="size-3.5" />
@@ -121,38 +63,9 @@ const SelectScrollDownButton = React.forwardRef<
   <SelectPrimitive.ScrollDownButton
     ref={ref}
     className={cn(
-      "flex h-6 cursor-pointer select-none items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors shrink-0",
+      "flex cursor-default items-center justify-center py-1 text-muted-foreground",
       className
     )}
-    onPointerMove={(e) => {
-      // Предотвращаем скролл при наведении курсора
-      e.preventDefault();
-    }}
-    onPointerDown={(e) => {
-      // Скроллим только при нажатии (клик или удержание)
-      e.preventDefault();
-      const target = e.currentTarget;
-      const scrollStep = () => {
-        const content = target.closest('[data-slot="select-content"]');
-        const viewport = content?.querySelector<HTMLElement>(
-          "[data-radix-select-viewport]"
-        );
-        if (viewport) {
-          viewport.scrollBy({ top: 28, behavior: "smooth" });
-        }
-      };
-
-      scrollStep();
-
-      const timer = window.setInterval(scrollStep, 110);
-      const stop = () => {
-        window.clearInterval(timer);
-        window.removeEventListener("pointerup", stop);
-        window.removeEventListener("pointercancel", stop);
-      };
-      window.addEventListener("pointerup", stop);
-      window.addEventListener("pointercancel", stop);
-    }}
     {...props}
   >
     <ChevronDown className="size-3.5" />
@@ -161,62 +74,37 @@ const SelectScrollDownButton = React.forwardRef<
 SelectScrollDownButton.displayName =
   SelectPrimitive.ScrollDownButton.displayName;
 
-export interface SelectContentProps
-  extends React.ComponentPropsWithoutRef<typeof SelectPrimitive.Content> {
-  viewportClassName?: string;
-}
-
 const SelectContent = React.forwardRef<
   React.ElementRef<typeof SelectPrimitive.Content>,
-  SelectContentProps
->(
-  (
-    {
-      className,
-      children,
-      position = "popper",
-      sideOffset = 4,
-      viewportClassName,
-      ...props
-    },
-    ref
-  ) => (
-    <SelectPrimitive.Portal>
-      <SelectPrimitive.Content
-        ref={ref}
-        data-slot="select-content"
+  React.ComponentPropsWithoutRef<typeof SelectPrimitive.Content>
+>(({ className, children, position = "popper", ...props }, ref) => (
+  <SelectPrimitive.Portal>
+    <SelectPrimitive.Content
+      ref={ref}
+      data-slot="select-content"
+      className={cn(
+        "relative z-[70] max-h-96 min-w-[8rem] overflow-hidden rounded-md border border-border bg-popover text-popover-foreground shadow-md data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=top]:slide-in-from-bottom-2",
+        position === "popper" &&
+          "data-[side=bottom]:translate-y-1 data-[side=top]:-translate-y-1",
+        className
+      )}
+      position={position}
+      {...props}
+    >
+      <SelectScrollUpButton />
+      <SelectPrimitive.Viewport
         className={cn(
-          // Kontur UI popup container: небольшое скругление/rounded-xl, мягкая тень, 1px граница
-          // max-h-[224px] вмещает ровно 6 элементов (6 x 28px = 168px) + кнопки скролла (2 x 24px = 48px) + padding (8px)
-          "relative z-[70] max-h-[224px] min-w-[8rem] overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-lg shadow-black/10 transition-all duration-150",
-          "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
-          position === "popper" && [
-            "data-[side=bottom]:translate-y-1 data-[side=top]:-translate-y-1",
-            "data-[side=bottom]:slide-in-from-top-1 data-[side=top]:slide-in-from-bottom-1"
-          ],
-          className
+          "p-1",
+          position === "popper" &&
+            "w-full min-w-[var(--radix-select-trigger-width)]"
         )}
-        position={position}
-        sideOffset={sideOffset}
-        {...props}
       >
-        <SelectScrollUpButton />
-        {/* Контейнер: небольшой padding (p-1) и отсутствие расстояния между элементами (space-y-0) */}
-        <SelectPrimitive.Viewport
-          className={cn(
-            "p-1 space-y-0",
-            position === "popper" &&
-              "w-full min-w-[var(--radix-select-trigger-width)]",
-            viewportClassName
-          )}
-        >
-          {children}
-        </SelectPrimitive.Viewport>
-        <SelectScrollDownButton />
-      </SelectPrimitive.Content>
-    </SelectPrimitive.Portal>
-  )
-);
+        {children}
+      </SelectPrimitive.Viewport>
+      <SelectScrollDownButton />
+    </SelectPrimitive.Content>
+  </SelectPrimitive.Portal>
+));
 SelectContent.displayName = SelectPrimitive.Content.displayName;
 
 const SelectLabel = React.forwardRef<
@@ -225,10 +113,7 @@ const SelectLabel = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <SelectPrimitive.Label
     ref={ref}
-    className={cn(
-      "px-2.5 py-1 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider",
-      className
-    )}
+    className={cn("px-2 py-1.5 text-xs font-semibold text-muted-foreground", className)}
     {...props}
   />
 ));
@@ -242,22 +127,17 @@ const SelectItem = React.forwardRef<
     ref={ref}
     data-slot="select-item"
     className={cn(
-      // Скругление элементов: rounded-md, отсутствие отступов между элементами: my-0
-      "relative flex w-full cursor-pointer select-none items-center justify-between rounded-md px-2.5 py-1.5 text-xs outline-none transition-colors my-0",
-      "hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground",
-      "data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground",
-      "data-[state=checked]:bg-accent/60 data-[state=checked]:font-medium data-[state=checked]:text-foreground",
-      "data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+      "relative flex w-full cursor-pointer select-none items-center rounded-sm py-1.5 pl-2 pr-8 text-xs outline-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
       className
     )}
     {...props}
   >
-    <SelectPrimitive.ItemText className="truncate">
-      {children}
-    </SelectPrimitive.ItemText>
-    <SelectPrimitive.ItemIndicator className="ml-2 flex items-center justify-center shrink-0">
-      <Check className="size-3.5 stroke-[2.5] text-primary" />
-    </SelectPrimitive.ItemIndicator>
+    <span className="absolute right-2 flex size-3.5 items-center justify-center">
+      <SelectPrimitive.ItemIndicator>
+        <Check className="size-3.5 stroke-[2.5]" />
+      </SelectPrimitive.ItemIndicator>
+    </span>
+    <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
   </SelectPrimitive.Item>
 ));
 SelectItem.displayName = SelectPrimitive.Item.displayName;
@@ -274,7 +154,6 @@ const SelectSeparator = React.forwardRef<
 ));
 SelectSeparator.displayName = SelectPrimitive.Separator.displayName;
 
-// High-level wrapper for simple dropdowns
 export interface SelectOption {
   value: string;
   label: React.ReactNode;
@@ -295,7 +174,6 @@ export interface SelectFieldProps {
   "data-testid"?: string;
   "aria-label"?: string;
   size?: "default" | "sm" | "xs" | "lg";
-  variant?: "default" | "ghost";
   hideChevron?: boolean;
 }
 
@@ -312,7 +190,6 @@ export const SelectField: React.FC<SelectFieldProps> = ({
   "data-testid": dataTestId,
   "aria-label": ariaLabel,
   size = "default",
-  variant = "default",
   hideChevron = false,
 }) => {
   return (
@@ -327,7 +204,6 @@ export const SelectField: React.FC<SelectFieldProps> = ({
         data-testid={dataTestId}
         aria-label={ariaLabel}
         size={size}
-        variant={variant}
         hideChevron={hideChevron}
         className={triggerClassName}
       >

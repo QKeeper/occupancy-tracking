@@ -592,14 +592,14 @@ export const TimelineGroupsModal: React.FC<TimelineGroupsModalProps> = ({
                       return (
                         <div
                           key={key}
-                          className={`p-3 rounded-lg border min-h-[68px] flex flex-col justify-center transition-colors ${
+                          className={`p-3 rounded-lg border min-h-[58px] flex flex-col justify-center transition-colors ${
                             dayConfig.isWorking
                               ? "border-border bg-card/80"
                               : "border-border/40 bg-muted/15 opacity-70"
                           }`}
                         >
-                          <div className="flex items-center justify-between gap-3 min-h-[42px]">
-                            <div className="flex items-center gap-3">
+                          <div className="flex items-start justify-between gap-3 min-h-[32px]">
+                            <div className="flex items-center gap-3 h-8">
                               <Switch
                                 checked={dayConfig.isWorking}
                                 onCheckedChange={(checked) => handleToggleWeeklyDay(key, checked)}
@@ -610,58 +610,65 @@ export const TimelineGroupsModal: React.FC<TimelineGroupsModalProps> = ({
                             </div>
 
                             {dayConfig.isWorking && (
-                              <div className="flex flex-wrap items-center gap-2">
-                                {dayConfig.slots.map((slot, idx) => (
-                                  <div key={idx} className="flex items-center gap-1.5 bg-muted/40 p-1 rounded-md border border-border/60">
-                                    <TimeInput24
-                                      value={slot.start}
-                                      onChange={(v) => handleSlotChange(key, idx, "start", v)}
-                                    />
-                                    <span className="text-muted-foreground text-xs">–</span>
-                                    <TimeInput24
-                                      value={slot.end}
-                                      onChange={(v) => handleSlotChange(key, idx, "end", v)}
-                                    />
-                                    {dayConfig.slots.length > 1 && (
-                                      <button
-                                        type="button"
-                                        onClick={() => handleRemoveSlot(key, idx)}
-                                        className="text-muted-foreground hover:text-destructive p-0.5 rounded"
-                                      >
-                                        <Trash2 className="size-3" />
-                                      </button>
-                                    )}
-                                  </div>
-                                ))}
+                              <div className="flex items-start gap-2">
+                                <div className="flex flex-col gap-1.5">
+                                  {dayConfig.slots.map((slot, idx) => (
+                                    <div key={idx} className="flex items-center gap-1.5">
+                                      <TimeInput24
+                                        value={slot.start}
+                                        onChange={(v) => handleSlotChange(key, idx, "start", v)}
+                                      />
+                                      <span className="text-muted-foreground text-xs">–</span>
+                                      <TimeInput24
+                                        value={slot.end}
+                                        onChange={(v) => handleSlotChange(key, idx, "end", v)}
+                                      />
+                                      {dayConfig.slots.length > 1 && (
+                                        <button
+                                          type="button"
+                                          onClick={() => handleRemoveSlot(key, idx)}
+                                          className="text-muted-foreground hover:text-destructive p-1 rounded transition-colors"
+                                          title="Удалить слот"
+                                        >
+                                          <Trash2 className="size-3" />
+                                        </button>
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
 
-                                <Button
-                                  type="button"
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => handleAddSlot(key)}
-                                  className="h-7 px-2 text-[11px]"
-                                >
-                                  <Plus className="size-3 mr-1" />
-                                  Слот
-                                </Button>
+                                <div className="flex items-center gap-1 self-start">
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => handleAddSlot(key)}
+                                    className="h-8 px-2 text-[11px]"
+                                  >
+                                    <Plus className="size-3 mr-1" />
+                                    Слот
+                                  </Button>
 
-                                <Button
-                                  type="button"
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => handleCopyToAllDays(key)}
-                                  className="h-7 px-2 text-[10px] text-muted-foreground hover:text-foreground"
-                                  title="Скопировать этот график на все дни недели"
-                                >
-                                  На все дни
-                                </Button>
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => handleCopyToAllDays(key)}
+                                    className="h-8 px-2 text-[10px] text-muted-foreground hover:text-foreground"
+                                    title="Скопировать этот график на все дни недели"
+                                  >
+                                    На все дни
+                                  </Button>
+                                </div>
                               </div>
                             )}
 
                             {!dayConfig.isWorking && (
-                              <span className="text-xs text-muted-foreground italic">
-                                Выходной
-                              </span>
+                              <div className="flex items-center h-8">
+                                <span className="text-xs text-muted-foreground italic">
+                                  Выходной
+                                </span>
+                              </div>
                             )}
                           </div>
                         </div>
