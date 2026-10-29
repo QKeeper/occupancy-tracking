@@ -9,6 +9,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import {
+  Select,
+  SelectTrigger,
+  SelectContent,
+  SelectItem,
+  SelectValue,
+} from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { format } from "date-fns";
 import { ru } from "date-fns/locale/ru";
@@ -427,21 +434,28 @@ export function AgentApiView({
                 <Label htmlFor="agent-group-select" className="text-xs">
                   Активная группа:
                 </Label>
-                <select
-                  id="agent-group-select"
-                  data-testid="agent-group-select"
-                  value={activeGroup?.id ?? ""}
-                  onChange={(e) => onSelectGroup(Number(e.target.value))}
-                  className="rounded border border-border bg-background px-2 py-1 text-xs font-medium"
+                <Select
+                  value={activeGroup ? String(activeGroup.id) : undefined}
+                  onValueChange={(val) => onSelectGroup(Number(val))}
                 >
-                  {groups
-                    .filter((g) => g.my_status === "accepted")
-                    .map((g) => (
-                      <option key={g.id} value={g.id}>
-                        #{g.id} — {g.name}
-                      </option>
-                    ))}
-                </select>
+                  <SelectTrigger
+                    id="agent-group-select"
+                    data-testid="agent-group-select"
+                    size="sm"
+                    className="w-auto min-w-[140px] text-xs font-medium"
+                  >
+                    <SelectValue placeholder="Выберите группу" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {groups
+                      .filter((g) => g.my_status === "accepted")
+                      .map((g) => (
+                        <SelectItem key={g.id} value={String(g.id)}>
+                          #{g.id} — {g.name}
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
               </div>
             )}
             <Button
@@ -658,17 +672,24 @@ export function AgentApiView({
                   <Label htmlFor="agent-ov-status" className="text-xs">
                     Статус дня
                   </Label>
-                  <select
-                    id="agent-ov-status"
-                    data-testid="agent-ov-status"
+                  <Select
                     value={ovStatus}
-                    onChange={(e) => setOvStatus(e.target.value as any)}
-                    className="w-full h-9 rounded-md border border-border bg-background px-2.5 text-xs"
+                    onValueChange={(val) => setOvStatus(val as any)}
                   >
-                    <option value="working">working (Занят в указанные часы)</option>
-                    <option value="free">free (Полностью свободен / Выходной)</option>
-                    <option value="partial">partial (Частично занят)</option>
-                  </select>
+                    <SelectTrigger
+                      id="agent-ov-status"
+                      data-testid="agent-ov-status"
+                      size="default"
+                      className="w-full text-xs"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="working">working (Занят в указанные часы)</SelectItem>
+                      <SelectItem value="free">free (Полностью свободен / Выходной)</SelectItem>
+                      <SelectItem value="partial">partial (Частично занят)</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
 
@@ -802,13 +823,10 @@ export function AgentApiView({
                 <Label htmlFor="agent-sched-mode" className="text-xs">
                   Режим:
                 </Label>
-                <select
-                  id="agent-sched-mode"
-                  data-testid="agent-sched-mode"
+                <Select
                   value={schedMode}
-                  onChange={(e) => {
-                    const nextMode = e.target.value as any;
-                    setSchedMode(nextMode);
+                  onValueChange={(nextMode) => {
+                    setSchedMode(nextMode as any);
                     try {
                       const obj = JSON.parse(schedJson);
                       obj.mode = nextMode;
@@ -817,12 +835,21 @@ export function AgentApiView({
                       // ignore
                     }
                   }}
-                  className="rounded border border-border bg-background px-2 py-1 text-xs font-mono"
                 >
-                  <option value="fixed_weekly">fixed_weekly (Недельный 5/2 и т.д.)</option>
-                  <option value="shift_cycle">shift_cycle (Сменный N/M)</option>
-                  <option value="manual">manual (Свободный / только ручные правки)</option>
-                </select>
+                  <SelectTrigger
+                    id="agent-sched-mode"
+                    data-testid="agent-sched-mode"
+                    size="sm"
+                    className="w-auto min-w-[180px] text-xs font-mono"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="fixed_weekly">fixed_weekly (Недельный 5/2 и т.д.)</SelectItem>
+                    <SelectItem value="shift_cycle">shift_cycle (Сменный N/M)</SelectItem>
+                    <SelectItem value="manual">manual (Свободный / только ручные правки)</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
             </div>
 

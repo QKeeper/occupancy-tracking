@@ -1,5 +1,12 @@
 import * as React from "react";
 import { cn } from "@/lib/utils";
+import {
+  Select,
+  SelectTrigger,
+  SelectContent,
+  SelectItem,
+  SelectValue,
+} from "@/components/ui/select";
 
 interface TimeInput24Props {
   value: string; // "HH:MM"
@@ -28,35 +35,55 @@ export const TimeInput24: React.FC<TimeInput24Props> = ({ value, onChange, class
   return (
     <div
       className={cn(
-        "inline-flex items-center h-8 rounded-lg border border-input bg-transparent dark:bg-input/30 px-2 font-mono text-xs transition-colors focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50",
+        "inline-flex items-center h-8 rounded-lg border border-input bg-transparent dark:bg-input/30 px-1 font-mono text-xs transition-colors focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50",
         className
       )}
     >
-      <select
+      <Select
         value={hh}
-        onChange={(e) => onChange(`${e.target.value}:${rawMm}`)}
-        className="bg-transparent text-foreground outline-none cursor-pointer pr-0.5 appearance-none text-center"
-        aria-label="Часы"
+        onValueChange={(val) => onChange(`${val}:${rawMm}`)}
       >
-        {HOURS.map((h) => (
-          <option key={h} value={h} className="bg-popover text-popover-foreground">
-            {h}
-          </option>
-        ))}
-      </select>
-      <span className="text-muted-foreground mx-0.5 select-none">:</span>
-      <select
+        <SelectTrigger
+          variant="ghost"
+          size="xs"
+          hideChevron
+          aria-label="Часы"
+          className="w-7 h-6 px-0 text-center font-mono text-xs justify-center hover:bg-muted/50 rounded"
+        >
+          <SelectValue>{hh}</SelectValue>
+        </SelectTrigger>
+        <SelectContent className="min-w-[4.5rem] max-h-48">
+          {HOURS.map((h) => (
+            <SelectItem key={h} value={h} className="font-mono text-xs">
+              {h}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+
+      <span className="text-muted-foreground mx-0.5 select-none font-semibold">:</span>
+
+      <Select
         value={rawMm}
-        onChange={(e) => onChange(`${hh}:${e.target.value}`)}
-        className="bg-transparent text-foreground outline-none cursor-pointer pl-0.5 appearance-none text-center"
-        aria-label="Минуты"
+        onValueChange={(val) => onChange(`${hh}:${val}`)}
       >
-        {minuteOptions.map((m) => (
-          <option key={m} value={m} className="bg-popover text-popover-foreground">
-            {m}
-          </option>
-        ))}
-      </select>
+        <SelectTrigger
+          variant="ghost"
+          size="xs"
+          hideChevron
+          aria-label="Минуты"
+          className="w-7 h-6 px-0 text-center font-mono text-xs justify-center hover:bg-muted/50 rounded"
+        >
+          <SelectValue>{rawMm}</SelectValue>
+        </SelectTrigger>
+        <SelectContent className="min-w-[4.5rem] max-h-48">
+          {minuteOptions.map((m) => (
+            <SelectItem key={m} value={m} className="font-mono text-xs">
+              {m}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </div>
   );
 };

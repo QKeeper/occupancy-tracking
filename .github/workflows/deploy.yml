@@ -84,7 +84,9 @@ jobs:
           port: ${{ secrets.SSH_PORT || 22 }}
           script: |
             set -e
-            echo "Connecting to application directory: ${{ secrets.APP_DIR }}"
-            cd ${{ secrets.APP_DIR }}
+            APP_PATH="${{ secrets.APP_DIR }}"
+            APP_PATH="${APP_PATH:-/var/www/schedule.ssdk.dev}"
+            echo "Connecting to application directory: $APP_PATH"
+            cd "$APP_PATH"
             chmod +x deploy.sh
             ./deploy.sh

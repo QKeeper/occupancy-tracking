@@ -8,6 +8,9 @@ echo "=========================================="
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$APP_DIR"
 
+# Ensure standard binary paths and pnpm are in PATH for non-interactive SSH
+export PATH="/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:$HOME/.local/share/pnpm:$HOME/.pnpm-global/bin:$PATH"
+
 if [ ! -f .env ]; then
   echo "❌ Error: .env file not found in $APP_DIR"
   echo "Please create .env with DATABASE_URL connecting to your PostgreSQL instance."
@@ -25,8 +28,21 @@ if [ "$CURRENT_BRANCH" = "main" ]; then
   git pull origin main
 fi
 
-# Check deployment mode: PM2, systemd, or Docker
-if command -v pm2 &> /dev/null && (pm2 list | grep -q "occupancy-tracking" || [ -f ecosystem.config.cjs ]); then
+# Check deployment mode: systemd (occupancy-tracking), PM2, or Docker
+if systemctl is-active --quiet occupancy-tracking.service 2>/dev/null || [ -f /etc/systemd/system/occupancy-tracking.service ]; then
+  echo "⚙️ Deploying with systemd (occupancy-tracking.service)..."
+  pnpm install --frozen-lockfile
+  pnpm run build
+  if [ "$(id -u)" -eq 0 ]; then
+    systemctl daemon-reload || true
+    systemctl restart occupancy-tracking
+  elif command -v sudo &> /dev/null; then
+    sudo systemctl daemon-reload || true
+    sudo systemctl restart occupancy-tracking
+  else
+    systemctl restart occupancy-tracking
+  fi
+elif command -v pm2 &> /dev/null && (pm2 list | grep -q "occupancy-tracking" || [ -f ecosystem.config.cjs ]); then
   echo "⚡ Deploying with PM2..."
   pnpm install --frozen-lockfile
   pnpm run build
@@ -36,11 +52,6 @@ if command -v pm2 &> /dev/null && (pm2 list | grep -q "occupancy-tracking" || [ 
     pm2 start ecosystem.config.cjs
   fi
   pm2 save
-elif systemctl is-active --quiet occupancy-tracking.service 2>/dev/null || [ -f /etc/systemd/system/occupancy-tracking.service ]; then
-  echo "⚙️ Deploying with systemd..."
-  pnpm install --frozen-lockfile
-  pnpm run build
-  sudo systemctl restart occupancy-tracking
 elif command -v docker &> /dev/null && [ -f docker-compose.prod.yml ]; then
   echo "🐳 Deploying with Docker Compose..."
   docker compose -f docker-compose.prod.yml up -d --build --remove-orphans
@@ -65,7 +76,7 @@ done
 
 if [ $ATTEMPT -eq $MAX_ATTEMPTS ]; then
   echo "⚠️ Warning: Healthcheck probe timed out at $HEALTH_URL."
-  echo "Check application logs (pm2 logs or journalctl -u occupancy-tracking)."
+  echo "Check application logs (journalctl -u occupancy-tracking or pm2 logs)."
 else
   echo "✅ Service is up and healthy on port $PORT!"
 fi

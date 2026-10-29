@@ -38,16 +38,18 @@
 
 ## 3. Архитектура деплоя (Production Deployment)
 
-* **Контейнеризация:** Docker + Docker Compose (`Dockerfile` и `docker-compose.prod.yml`).
-  * Контейнер приложения работает в изолированном окружении, не конфликтуя с хостом.
-  * Доступ к существующей на хосте PostgreSQL настраивается через `host.docker.internal:5432` (директива `extra_hosts` в compose-файле).
-  * Директория загруженных изображений монтируется как том (`./uploads:/app/uploads`), что гарантирует сохранность аватаров и баннеров при пересборках.
+* **Продакшен-демон (systemd):**
+  * Служба: `/etc/systemd/system/occupancy-tracking.service`.
+  * Рабочая директория: `/var/www/schedule.ssdk.dev`.
+  * Команда запуска: `ExecStart=/usr/bin/pnpm start` (запускает `tsx server/index.ts`).
+  * Пользователь: `root`.
 * **Раздача статики:**
   * Express-сервер автоматически раздает клиентский билд из папки `/dist` при обращении к любым SPA-маршрутам.
   * Порт бэкенда по умолчанию: `3001` (привязан к `127.0.0.1:3001` для безопасности).
 * **Nginx Reverse Proxy:**
   * Проксирует запросы с 80/443 порта на `127.0.0.1:3001`.
-  * Готовый конфиг находится в `nginx/occupancy-tracking.conf` (включает поддержку Server-Sent Events `/api/events` с отключенным буферизированием и лимит тела запроса 25MB для медиа).
+  * Домен: `schedule.ssdk.dev`.
+  * Конфиг включает поддержку Server-Sent Events `/api/events` с отключенным буферизированием (`proxy_buffering off;`) и лимит тела запроса 25MB для медиа.
 
 ---
 
@@ -64,15 +66,16 @@
 2. **Шаг `deploy`:**
    * Запускается только при пуше в `main` (или ручном запуске через `workflow_dispatch`).
    * Подключается к серверу по SSH с использованием GitHub Secrets.
-   * Запускает скрипт `./deploy.sh`: подтягивает изменения (`git pull`), выполняет сборку контейнера (`docker compose up -d --build`) и проверяет здоровье сервиса (`/api/health`).
+   * Заходит в папку приложения (`/var/www/schedule.ssdk.dev`).
+   * Запускает скрипт `./deploy.sh`: подтягивает изменения (`git pull`), устанавливает зависимости (`pnpm install --frozen-lockfile`), собирает фронтенд (`pnpm run build`), перезапускает службу (`systemctl restart occupancy-tracking`) и проверяет здоровье сервиса (`/api/health`).
 
 ### Необходимые GitHub Secrets:
 В настройках GitHub репозитория (**Settings -> Secrets and variables -> Actions**):
-* `SSH_HOST`: IP-адрес или домен вашего сервера (например, `194.87.x.x`).
-* `SSH_USER`: Пользователь SSH на сервере (например, `root` или `deploy`).
+* `SSH_HOST`: IP-адрес или домен вашего сервера (например, `schedule.ssdk.dev` или IP).
+* `SSH_USER`: Пользователь SSH на сервере (например, `root`).
 * `SSH_KEY`: Приватный SSH-ключ для авторизации (соответствующий публичный ключ должен быть в `~/.ssh/authorized_keys` на сервере).
 * `SSH_PORT`: Порт SSH (обычно `22`).
-* `APP_DIR`: Полный путь к папке проекта на сервере (например, `/opt/occupancy-tracking`).
+* `APP_DIR`: Полный путь к папке проекта на сервере (`/var/www/schedule.ssdk.dev`, по умолчанию подставляется автоматически).
 
 ---
 
@@ -80,10 +83,9 @@
 
 1. **Клонирование проекта на сервер:**
    ```bash
-   sudo mkdir -p /opt/occupancy-tracking
-   sudo chown $USER:$USER /opt/occupancy-tracking
-   git clone <URL_РЕПОЗИТОРИЯ> /opt/occupancy-tracking
-   cd /opt/occupancy-tracking
+   sudo mkdir -p /var/www/schedule.ssdk.dev
+   git clone <URL_РЕПОЗИТОРИЯ> /var/www/schedule.ssdk.dev
+   cd /var/www/schedule.ssdk.dev
    ```
 
 2. **Создание `.env` файла:**
@@ -91,27 +93,36 @@
    cp .env.production.example .env
    nano .env
    ```
-   Укажите пароль от базы данных `DATABASE_URL` и домен в `APP_ORIGINS`.
+   Укажите строку подключения к базе `DATABASE_URL` и домен `APP_ORIGINS=https://schedule.ssdk.dev`.
 
-3. **Проверка прав на `deploy.sh`:**
+3. **Служба systemd (`/etc/systemd/system/occupancy-tracking.service`):**
+   ```ini
+   [Unit]
+   Description=Occupancy Tracking (Syncro)
+   After=network.target postgresql.service
+
+   [Service]
+   Type=simple
+   User=root
+   WorkingDirectory=/var/www/schedule.ssdk.dev
+   ExecStart=/usr/bin/pnpm start
+   Restart=always
+   RestartSec=3
+   Environment=NODE_ENV=production
+
+   [Install]
+   WantedBy=multi-user.target
+   ```
+   Активация:
+   ```bash
+   systemctl daemon-reload
+   systemctl enable occupancy-tracking
+   systemctl start occupancy-tracking
+   ```
+
+4. **Проверка прав на `deploy.sh`:**
    ```bash
    chmod +x deploy.sh
-   ```
-
-4. **Первый запуск вручную:**
-   ```bash
-   ./deploy.sh
-   ```
-
-5. **Настройка Nginx:**
-   ```bash
-   sudo cp nginx/occupancy-tracking.conf /etc/nginx/sites-available/occupancy-tracking
-   # Отредактируйте server_name на ваш домен:
-   sudo nano /etc/nginx/sites-available/occupancy-tracking
-   sudo ln -s /etc/nginx/sites-available/occupancy-tracking /etc/nginx/sites-enabled/
-   sudo nginx -t && sudo systemctl reload nginx
-   # Получение SSL-сертификата (Let's Encrypt):
-   sudo certbot --nginx -d your-domain.com
    ```
 
 ---

@@ -14,6 +14,13 @@ import { PasswordInput } from "@/components/ui/password-input";
 import { ImageCropperModal, NormalizedCrop } from "@/components/ui/image-cropper-modal";
 import { Label } from "@/components/ui/label";
 import {
+  Select,
+  SelectTrigger,
+  SelectContent,
+  SelectItem,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   loginSchema,
   registerSchema,
   profileSchema,
@@ -938,19 +945,25 @@ export const ProfileCabinetModal: React.FC<ProfileCabinetModalProps> = ({
                                 определить авто
                               </button>
                             </div>
-                            <select
-                              id="profile-timezone-select"
-                              data-testid="profile-timezone-select"
-                              value={timeZone}
-                              onChange={(e) => setTimeZone(e.target.value)}
-                              className="w-full mt-1 h-8 rounded-md border border-border bg-background px-2 text-xs text-foreground outline-none focus:ring-2 focus:ring-ring/50 cursor-pointer"
+                            <Select
+                              value={timeZone || DEFAULT_SCHEDULE_TIMEZONE}
+                              onValueChange={(val) => setTimeZone(val)}
                             >
-                              {getAvailableTimeZoneOptions(timeZone).map((opt) => (
-                                <option key={opt.value} value={opt.value}>
-                                  {formatTimeZoneOptionLabel(opt)}
-                                </option>
-                              ))}
-                            </select>
+                              <SelectTrigger
+                                id="profile-timezone-select"
+                                data-testid="profile-timezone-select"
+                                className="w-full mt-1 h-8 text-xs cursor-pointer"
+                              >
+                                <SelectValue placeholder="Выберите часовой пояс" />
+                              </SelectTrigger>
+                              <SelectContent className="max-h-64">
+                                {getAvailableTimeZoneOptions(timeZone).map((opt) => (
+                                  <SelectItem key={opt.value} value={opt.value}>
+                                    {formatTimeZoneOptionLabel(opt)}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
                             <p className="text-[11px] text-muted-foreground mt-1">
                               Все даты и интервалы на таймлайнах пересчитываются в выбранный часовой пояс
                             </p>
